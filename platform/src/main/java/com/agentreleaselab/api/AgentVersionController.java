@@ -1,7 +1,8 @@
 package com.agentreleaselab.api;
 
+import com.agentreleaselab.domain.AgentVersionRepository;
 import com.agentreleaselab.domain.AgentVersion;
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ApiException;
 import com.agentreleaselab.service.FingerprintService;
 import jakarta.validation.constraints.NotBlank;
@@ -9,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /** Agent version registry. Fingerprints are computed server-side so a version's
  *  identity can never be misreported by a client. */
@@ -16,9 +18,9 @@ import java.util.Map;
 @RequestMapping("/api/agent-versions")
 public class AgentVersionController {
 
-    private final Repositories.AgentVersionRepository versions;
+    private final AgentVersionRepository versions;
 
-    public AgentVersionController(Repositories.AgentVersionRepository versions) {
+    public AgentVersionController(AgentVersionRepository versions) {
         this.versions = versions;
     }
 
@@ -28,25 +30,29 @@ public class AgentVersionController {
 
     @PostMapping
     public Map<String, Object> register(@RequestBody RegisterVersion body) {
-        if (versions.findByName(body.name()).isPresent()) {
-            throw ApiException.conflict("VERSION_EXISTS", "An agent version with this name already exists");
+        UUID tenantId = TenantContext.get().tenantId();
+        if (versions.findByTenantIdAndName(tenantId, body.name()).isPresent()) {
+            throw ApiException.conflict("VERSION_EXISTS", "An agent version with this name already exists in your organization");
         }
         String fingerprint = FingerprintService.agentConfigFingerprint(
                 body.prompt(), body.modelId(),
                 body.retrievalConfig() == null ? Map.of() : body.retrievalConfig(),
                 body.toolSchemas() == null ? Map.of() : body.toolSchemas(),
                 body.docSnapshotId(), body.policyVersion());
-        AgentVersion v = new AgentVersion(body.name(), body.prompt(), body.modelId(),
+        // Content-addressed within the tenant: re-registering identical config reuses the record.
+        var existing = versions.findByTenantIdAndFingerprint(tenantId, fingerprint);
+        AgentVersion v = existing.orElseGet(() -> versions.save(new AgentVersion(tenantId, body.name(), body.prompt(), body.modelId(),
                 body.retrievalConfig() == null ? Map.of() : body.retrievalConfig(),
                 body.toolSchemas() == null ? Map.of() : body.toolSchemas(),
-                body.docSnapshotId(), body.policyVersion(), fingerprint);
-        v = versions.save(v);
-        return Map.of("id", v.getId().toString(), "name", v.getName(), "fingerprint", v.getFingerprint());
+                body.docSnapshotId(), body.policyVersion(), fingerprint)));
+        return Map.of("id", v.getId().toString(), "name", v.getName(), "fingerprint", v.getFingerprint(),
+                "reused", existing.isPresent());
     }
 
     @GetMapping
     public List<Map<String, Object>> list() {
-        return versions.findAll().stream().map(v -> Map.<String, Object>of(
+        UUID tenantId = TenantContext.get().tenantId();
+        return versions.findByTenantIdOrderByCreatedAtDesc(tenantId).stream().map(v -> Map.<String, Object>of(
                 "id", v.getId().toString(), "name", v.getName(), "modelId", v.getModelId(),
                 "fingerprint", v.getFingerprint(), "docSnapshotId", v.getDocSnapshotId(),
                 "policyVersion", v.getPolicyVersion())).toList();
@@ -54,7 +60,7 @@ public class AgentVersionController {
 
     @GetMapping("/{id}")
     public Map<String, Object> get(@PathVariable java.util.UUID id) {
-        AgentVersion v = versions.findById(id)
+        AgentVersion v = versions.findByIdAndTenantId(id, TenantContext.get().tenantId())
                 .orElseThrow(() -> ApiException.notFound("VERSION_NOT_FOUND", "No such agent version"));
         return Map.of("id", v.getId().toString(), "name", v.getName(), "prompt", v.getPrompt(),
                 "modelId", v.getModelId(), "retrievalConfig", v.getRetrievalConfig(),

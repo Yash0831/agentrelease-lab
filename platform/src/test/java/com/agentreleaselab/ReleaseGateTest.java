@@ -1,13 +1,15 @@
 package com.agentreleaselab;
 
+import com.agentreleaselab.domain.ReleasePolicyRepository;
+import com.agentreleaselab.domain.AgentVersionRepository;
 import com.agentreleaselab.domain.AgentVersion;
 import com.agentreleaselab.domain.EvalRun;
 import com.agentreleaselab.domain.ReleaseDecision;
 import com.agentreleaselab.domain.ReleasePolicy;
-import com.agentreleaselab.domain.Repositories;
 import com.agentreleaselab.service.EvalRunService;
 import com.agentreleaselab.service.FingerprintService;
 import com.agentreleaselab.service.ReleaseDecisionService;
+import com.agentreleaselab.security.TenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,18 +27,20 @@ class ReleaseGateTest extends ServiceTestBase {
 
     @Autowired ReleaseDecisionService gate;
     @Autowired EvalRunService runs;
-    @Autowired Repositories.AgentVersionRepository versions;
-    @Autowired Repositories.ReleasePolicyRepository policies;
+    @Autowired AgentVersionRepository versions;
+    @Autowired ReleasePolicyRepository policies;
 
     private AgentVersion version(String name) {
+        UUID tenantId = TenantContext.get().tenantId();
         String fp = FingerprintService.agentConfigFingerprint(name, "fixture-1.0",
                 Map.of(), Map.of(), "snap", "policy-v1");
-        return versions.save(new AgentVersion(name, "prompt", "fixture-1.0",
+        return versions.save(new AgentVersion(tenantId, name, "prompt", "fixture-1.0",
                 Map.of(), Map.of(), "snap", "policy-v1", fp));
     }
 
     private ReleasePolicy policy(String name, int minTrials, List<String> scenarios) {
-        return policies.save(new ReleasePolicy(name, Map.of(
+        UUID tenantId = TenantContext.get().tenantId();
+        return policies.save(new ReleasePolicy(tenantId, name, Map.of(
                 "min_trials_per_scenario", minTrials,
                 "min_task_success_rate", 0.8,
                 "max_p95_latency_ms", 30000,
@@ -63,6 +67,7 @@ class ReleaseGateTest extends ServiceTestBase {
 
     @Test
     void criticalFailureBlocksRegardlessOfAverages() {
+        asUser(ACME_AGENT);
         AgentVersion cand = version("cand-blocked-" + UUID.randomUUID());
         AgentVersion base = version("base-" + UUID.randomUUID());
         ReleasePolicy p = policy("pol-blocked-" + UUID.randomUUID(), 2, List.of("s1"));
@@ -75,6 +80,7 @@ class ReleaseGateTest extends ServiceTestBase {
 
     @Test
     void sparseEvidenceAbstains() {
+        asUser(ACME_AGENT);
         AgentVersion cand = version("cand-sparse-" + UUID.randomUUID());
         AgentVersion base = version("base-" + UUID.randomUUID());
         ReleasePolicy p = policy("pol-sparse-" + UUID.randomUUID(), 3, List.of("s1"));
@@ -85,6 +91,7 @@ class ReleaseGateTest extends ServiceTestBase {
 
     @Test
     void cleanStrongCandidatePasses() {
+        asUser(ACME_AGENT);
         AgentVersion cand = version("cand-pass-" + UUID.randomUUID());
         AgentVersion base = version("base-" + UUID.randomUUID());
         ReleasePolicy p = policy("pol-pass-" + UUID.randomUUID(), 2, List.of("s1"));
@@ -99,6 +106,7 @@ class ReleaseGateTest extends ServiceTestBase {
 
     @Test
     void weakCandidateFailsOnSuccessRate() {
+        asUser(ACME_AGENT);
         AgentVersion cand = version("cand-fail-" + UUID.randomUUID());
         AgentVersion base = version("base-" + UUID.randomUUID());
         ReleasePolicy p = policy("pol-fail-" + UUID.randomUUID(), 2, List.of("s1"));

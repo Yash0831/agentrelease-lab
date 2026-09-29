@@ -1,8 +1,10 @@
 package com.agentreleaselab.service;
 
+import com.agentreleaselab.domain.UserRepository;
+import com.agentreleaselab.domain.ApprovalRepository;
+import com.agentreleaselab.domain.AccessGrantRepository;
 import com.agentreleaselab.domain.AccessGrant;
 import com.agentreleaselab.domain.Approval;
-import com.agentreleaselab.domain.Repositories;
 import com.agentreleaselab.security.TenantContext;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
@@ -19,13 +21,13 @@ import java.util.*;
 @Service
 public class ApprovalService {
 
-    private final Repositories.ApprovalRepository approvals;
-    private final Repositories.AccessGrantRepository grants;
-    private final Repositories.UserRepository users;
+    private final ApprovalRepository approvals;
+    private final AccessGrantRepository grants;
+    private final UserRepository users;
 
-    public ApprovalService(Repositories.ApprovalRepository approvals,
-                           Repositories.AccessGrantRepository grants,
-                           Repositories.UserRepository users) {
+    public ApprovalService(ApprovalRepository approvals,
+                           AccessGrantRepository grants,
+                           UserRepository users) {
         this.approvals = approvals;
         this.grants = grants;
         this.users = users;
@@ -47,7 +49,9 @@ public class ApprovalService {
         args.put("resource", resource);
         if (reason != null && !reason.isBlank()) args.put("reason", reason);
         if (ticketKey != null && !ticketKey.isBlank()) args.put("ticketKey", ticketKey);
-        Instant expiresAt = Instant.now().plus(30, ChronoUnit.MINUTES);
+        // Truncate to micros: timestamptz cannot store nanos, so the fingerprint
+        // must be computed on the value that survives the DB round-trip (ADR-0005).
+        Instant expiresAt = Instant.now().plus(30, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MICROS);
         String fingerprint = FingerprintService.actionFingerprint(
                 "grant_access", args, ctx.userId(), ctx.tenantId(), expiresAt.toString());
         Approval approval = new Approval(ctx.tenantId(), "grant_access", args, fingerprint,
@@ -57,7 +61,7 @@ public class ApprovalService {
 
     @Transactional
     public Approval approve(TenantContext ctx, UUID approvalId) {
-        Approval a = loadForTenant(ctx, approvalId);
+        Approval a = loadForUpdateForTenant(ctx, approvalId);
         if (!ctx.hasAnyRole("APPROVER", "ADMIN")) {
             throw ApiException.forbidden("APPROVAL_APPROVE_DENIED", "Role may not approve access changes");
         }
@@ -80,7 +84,7 @@ public class ApprovalService {
 
     @Transactional
     public Approval reject(TenantContext ctx, UUID approvalId) {
-        Approval a = loadForTenant(ctx, approvalId);
+        Approval a = loadForUpdateForTenant(ctx, approvalId);
         if (!ctx.hasAnyRole("APPROVER", "ADMIN")) {
             throw ApiException.forbidden("APPROVAL_REJECT_DENIED", "Role may not reject access changes");
         }
@@ -96,7 +100,7 @@ public class ApprovalService {
      *  and status under a row lock; performs the side effect exactly once. */
     @Transactional
     public AccessGrant execute(TenantContext ctx, UUID approvalId) {
-        Approval a = loadForTenant(ctx, approvalId);
+        Approval a = loadForUpdateForTenant(ctx, approvalId);
         if (!a.getStatus().equals("APPROVED")) {
             throw ApiException.conflict("APPROVAL_NOT_APPROVED",
                     "Only APPROVED actions can be executed (current: " + a.getStatus() + ")");
@@ -142,14 +146,23 @@ public class ApprovalService {
                         "No such approval in your organization"));
     }
 
+    /** Locking read for the approve/execute critical section: the status gate
+     *  and the side effect must be atomic under concurrency (exactly-once). */
+    private Approval loadForUpdateForTenant(TenantContext ctx, UUID approvalId) {
+        return approvals.findByIdAndTenantIdForUpdate(approvalId, ctx.tenantId())
+                .orElseThrow(() -> ApiException.notFound("APPROVAL_NOT_FOUND",
+                        "No such approval in your organization"));
+    }
+
     // Test hook: create an approval with a custom expiry (not exposed via REST).
     @Transactional
     public Approval proposeWithExpiry(TenantContext ctx, String targetUsername, String resource, Instant expiresAt) {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("targetUsername", targetUsername);
         args.put("resource", resource);
+        Instant exp = expiresAt.truncatedTo(ChronoUnit.MICROS);
         String fingerprint = FingerprintService.actionFingerprint(
-                "grant_access", args, ctx.userId(), ctx.tenantId(), expiresAt.toString());
-        return approvals.save(new Approval(ctx.tenantId(), "grant_access", args, fingerprint, ctx.userId(), expiresAt));
+                "grant_access", args, ctx.userId(), ctx.tenantId(), exp.toString());
+        return approvals.save(new Approval(ctx.tenantId(), "grant_access", args, fingerprint, ctx.userId(), exp));
     }
 }

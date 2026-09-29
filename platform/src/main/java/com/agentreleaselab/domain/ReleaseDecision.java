@@ -10,6 +10,7 @@ import java.util.UUID;
 @Entity @Table(name = "release_decisions")
 public class ReleaseDecision {
     @Id private UUID id;
+    @Column(name = "tenant_id", nullable = false) private UUID tenantId;
     @Column(name = "candidate_version_id", nullable = false) private UUID candidateVersionId;
     @Column(name = "baseline_version_id", nullable = false) private UUID baselineVersionId;
     @Column(name = "policy_id", nullable = false) private UUID policyId;
@@ -20,13 +21,15 @@ public class ReleaseDecision {
     @Column(name = "decided_at", nullable = false) private Instant decidedAt = Instant.now();
 
     protected ReleaseDecision() {}
-    public ReleaseDecision(UUID candidateVersionId, UUID baselineVersionId, UUID policyId,
+    public ReleaseDecision(UUID tenantId, UUID candidateVersionId, UUID baselineVersionId, UUID policyId,
                            String verdict, Map<String, Object> evidence) {
-        this.id = UUID.randomUUID(); this.candidateVersionId = candidateVersionId;
+        this.id = UUID.randomUUID(); this.tenantId = tenantId;
+        this.candidateVersionId = candidateVersionId;
         this.baselineVersionId = baselineVersionId; this.policyId = policyId;
         this.verdict = verdict; this.evidence = evidence;
     }
     public UUID getId() { return id; }
+    public UUID getTenantId() { return tenantId; }
     public UUID getCandidateVersionId() { return candidateVersionId; }
     public UUID getBaselineVersionId() { return baselineVersionId; }
     public UUID getPolicyId() { return policyId; }

@@ -1,8 +1,8 @@
 package com.agentreleaselab.domain;
 
-import com.pgvector.PGvector;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.Type;
 import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.util.UUID;
@@ -20,8 +20,8 @@ public class Runbook {
     @JdbcTypeCode(SqlTypes.ARRAY)
     private String[] allowedRoles = {"AGENT","ADMIN","APPROVER","REQUESTER"};
     @Column(columnDefinition = "vector(384)")
-    @JdbcTypeCode(SqlTypes.VECTOR)
-    private PGvector embedding;
+    @Type(FloatVectorType.class)
+    private float[] embedding;
     @Column(name = "created_at", nullable = false) private Instant createdAt = Instant.now();
 
     protected Runbook() {}
@@ -38,6 +38,6 @@ public class Runbook {
     public void setStatus(String s) { this.status = s; }
     public String getContent() { return content; }
     public String[] getAllowedRoles() { return allowedRoles; }
-    public PGvector getEmbedding() { return embedding; }
-    public void setEmbedding(PGvector e) { this.embedding = e; }
+    public float[] getEmbedding() { return embedding; }
+    public void setEmbedding(float[] e) { this.embedding = e; }
 }

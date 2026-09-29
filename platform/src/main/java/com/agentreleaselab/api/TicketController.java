@@ -1,6 +1,7 @@
 package com.agentreleaselab.api;
 
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.domain.UserRepository;
+import com.agentreleaselab.domain.TicketRepository;
 import com.agentreleaselab.domain.Ticket;
 import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ApiException;
@@ -16,10 +17,10 @@ import java.util.UUID;
 @RequestMapping("/api/tickets")
 public class TicketController {
 
-    private final Repositories.TicketRepository tickets;
-    private final Repositories.UserRepository users;
+    private final TicketRepository tickets;
+    private final UserRepository users;
 
-    public TicketController(Repositories.TicketRepository tickets, Repositories.UserRepository users) {
+    public TicketController(TicketRepository tickets, UserRepository users) {
         this.tickets = tickets;
         this.users = users;
     }

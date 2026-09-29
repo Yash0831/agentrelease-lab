@@ -1,6 +1,6 @@
 package com.agentreleaselab.api;
 
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.domain.ServiceStatusRepository;
 import com.agentreleaselab.domain.ServiceStatus;
 import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ApiException;
@@ -14,9 +14,9 @@ import java.util.Map;
 @RequestMapping("/api/service-status")
 public class ServiceStatusController {
 
-    private final Repositories.ServiceStatusRepository repo;
+    private final ServiceStatusRepository repo;
 
-    public ServiceStatusController(Repositories.ServiceStatusRepository repo) {
+    public ServiceStatusController(ServiceStatusRepository repo) {
         this.repo = repo;
     }
 

@@ -1,7 +1,8 @@
 package com.agentreleaselab.security;
 
+import com.agentreleaselab.domain.UserRepository;
+import com.agentreleaselab.domain.TenantRepository;
 import com.agentreleaselab.domain.AppUser;
-import com.agentreleaselab.domain.Repositories;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -15,10 +16,10 @@ import java.util.HexFormat;
 @Service
 public class AuthService {
 
-    private final Repositories.UserRepository users;
-    private final Repositories.TenantRepository tenants;
+    private final UserRepository users;
+    private final TenantRepository tenants;
 
-    public AuthService(Repositories.UserRepository users, Repositories.TenantRepository tenants) {
+    public AuthService(UserRepository users, TenantRepository tenants) {
         this.users = users;
         this.tenants = tenants;
     }

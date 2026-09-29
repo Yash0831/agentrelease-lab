@@ -1,7 +1,8 @@
 package com.agentreleaselab;
 
+import com.agentreleaselab.domain.ApprovalRepository;
+import com.agentreleaselab.domain.AccessGrantRepository;
 import com.agentreleaselab.domain.Approval;
-import com.agentreleaselab.domain.Repositories;
 import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ApiException;
 import com.agentreleaselab.service.ApprovalService;
@@ -21,8 +22,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ApprovalWorkflowTest extends ServiceTestBase {
 
     @Autowired ApprovalService approvals;
-    @Autowired Repositories.ApprovalRepository approvalRepo;
-    @Autowired Repositories.AccessGrantRepository grants;
+    @Autowired ApprovalRepository approvalRepo;
+    @Autowired AccessGrantRepository grants;
 
     @Test
     void fullWorkflowExecutesExactlyOnce() {

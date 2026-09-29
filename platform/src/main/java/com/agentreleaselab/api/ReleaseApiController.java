@@ -1,14 +1,16 @@
 package com.agentreleaselab.api;
 
+import com.agentreleaselab.domain.ReleasePolicyRepository;
 import com.agentreleaselab.service.DatasetService;
 import com.agentreleaselab.service.ReleaseDecisionService;
 import com.agentreleaselab.domain.ReleaseDecision;
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ApiException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.UUID;
 
 /** Datasets, release policies, and the release decision endpoint. */
@@ -17,10 +19,10 @@ public class ReleaseApiController {
 
     private final DatasetService datasets;
     private final ReleaseDecisionService gate;
-    private final Repositories.ReleasePolicyRepository policies;
+    private final ReleasePolicyRepository policies;
 
     public ReleaseApiController(DatasetService datasets, ReleaseDecisionService gate,
-                                Repositories.ReleasePolicyRepository policies) {
+                                ReleasePolicyRepository policies) {
         this.datasets = datasets;
         this.gate = gate;
         this.policies = policies;
@@ -38,7 +40,7 @@ public class ReleaseApiController {
 
     @GetMapping("/api/release-policies")
     public List<Map<String, Object>> policies() {
-        return policies.findByActiveTrue().stream()
+        return policies.findByTenantIdAndActiveTrueOrderByCreatedAtDesc(TenantContext.get().tenantId()).stream()
                 .map(p -> Map.<String, Object>of("id", p.getId().toString(), "name", p.getName(),
                         "thresholds", p.getThresholds())).toList();
     }
@@ -47,12 +49,13 @@ public class ReleaseApiController {
 
     @PostMapping("/api/release-policies")
     public Map<String, Object> createPolicy(@RequestBody CreatePolicy body) {
-        var existing = policies.findByName(body.name());
+        UUID tenantId = TenantContext.get().tenantId();
+        var existing = policies.findByTenantIdAndName(tenantId, body.name());
         if (existing.isPresent()) {
             return Map.of("id", existing.get().getId().toString(), "name", existing.get().getName(),
                     "thresholds", existing.get().getThresholds(), "reused", true);
         }
-        var p = policies.save(new com.agentreleaselab.domain.ReleasePolicy(body.name(), body.thresholds()));
+        var p = policies.save(new com.agentreleaselab.domain.ReleasePolicy(tenantId, body.name(), body.thresholds()));
         return Map.of("id", p.getId().toString(), "name", p.getName(), "thresholds", p.getThresholds());
     }
 

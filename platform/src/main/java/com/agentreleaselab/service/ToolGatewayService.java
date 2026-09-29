@@ -1,6 +1,9 @@
 package com.agentreleaselab.service;
 
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.domain.ToolCallRepository;
+import com.agentreleaselab.domain.TicketRepository;
+import com.agentreleaselab.domain.ServiceStatusRepository;
+import com.agentreleaselab.domain.EvalRunRepository;
 import com.agentreleaselab.domain.Ticket;
 import com.agentreleaselab.domain.ToolCall;
 import com.agentreleaselab.security.TenantContext;
@@ -26,10 +29,10 @@ public class ToolGatewayService {
 
     private static final Set<String> TICKET_STATUSES = Set.of("OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED");
 
-    private final Repositories.ToolCallRepository toolCalls;
-    private final Repositories.TicketRepository tickets;
-    private final Repositories.ServiceStatusRepository serviceStatus;
-    private final Repositories.EvalRunRepository evalRunRepo;
+    private final ToolCallRepository toolCalls;
+    private final TicketRepository tickets;
+    private final ServiceStatusRepository serviceStatus;
+    private final EvalRunRepository evalRunRepo;
     private final RetrievalService retrieval;
     private final ApprovalService approvals;
     private final TraceService traces;
@@ -38,10 +41,10 @@ public class ToolGatewayService {
     private final int maxActionBudget;
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
-    public ToolGatewayService(Repositories.ToolCallRepository toolCalls,
-                              Repositories.TicketRepository tickets,
-                              Repositories.ServiceStatusRepository serviceStatus,
-                              Repositories.EvalRunRepository evalRunRepo,
+    public ToolGatewayService(ToolCallRepository toolCalls,
+                              TicketRepository tickets,
+                              ServiceStatusRepository serviceStatus,
+                              EvalRunRepository evalRunRepo,
                               RetrievalService retrieval,
                               ApprovalService approvals,
                               TraceService traces,
@@ -127,6 +130,18 @@ public class ToolGatewayService {
                     "Tool '" + toolName + "' is not in the agent allowlist", null, traceId);
         }
 
+        // 2b. Prompt-injection tripwire (deterministic, ADR-0002): tool
+        // arguments that echo known injection markers are blocked before any
+        // business logic runs. This is a heuristic safety net, not a proof —
+        // the release gate still judges the *candidate* on whether it acted on
+        // injected content (see metrics.critical_policy_failure).
+        String marker = InjectionDetector.findMarker(safeArgs);
+        if (marker != null) {
+            return persist(ctx, evalRunId, toolName, safeArgs, idempotencyKey,
+                    "INJECTION_BLOCKED", null, "INJECTION_BLOCKED",
+                    "Blocked: tool arguments contain a prompt-injection marker (" + marker + ")", null, traceId);
+        }
+
         // 3. Schema validation.
         List<String> violations = validateArgs(toolName, safeArgs);
         if (!violations.isEmpty()) {
@@ -205,7 +220,8 @@ public class ToolGatewayService {
 
     private ChaosConfig loadChaos(UUID evalRunId) {
         if (evalRunId == null) return new ChaosConfig(Map.of());
-        return evalRunRepo.findById(evalRunId)
+        // Tenant-scoped: chaos config comes only from the caller's own run.
+        return evalRunRepo.findByIdAndTenantId(evalRunId, TenantContext.get().tenantId())
                 .map(r -> new ChaosConfig(r.getChaos() == null ? Map.of() : r.getChaos()))
                 .orElse(new ChaosConfig(Map.of()));
     }
@@ -221,8 +237,11 @@ public class ToolGatewayService {
                     yield new ToolOutcome("OK", Map.of("results", List.of()),
                             null, null, null, false);
                 }
+                // Chaos: surface STALE runbooks so the agent must reconcile
+                // stale evidence against live service state.
+                boolean includeStale = Boolean.TRUE.equals(chaos.raw().get("include_stale_runbooks"));
                 int topK = args.get("topK") instanceof Number n ? n.intValue() : 5;
-                var hits = retrieval.search(String.valueOf(args.get("query")), topK);
+                var hits = retrieval.search(String.valueOf(args.get("query")), topK, includeStale);
                 List<Map<String, Object>> out = new ArrayList<>();
                 hits.forEach(h -> out.add(Map.of(
                         "slug", h.slug(), "title", h.title(), "version", h.version(),

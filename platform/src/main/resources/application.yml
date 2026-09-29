@@ -5,7 +5,7 @@ spring:
   application:
     name: agentrelease-lab-platform
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/agentreleaselab}
+    url: ${DATABASE_URL:jdbc:postgresql://[::1]:5432/agentreleaselab?sslmode=disable}
     username: ${DB_USER:arl}
     password: ${DB_PASSWORD:change-me-in-dev-only}
     driver-class-name: org.postgresql.Driver

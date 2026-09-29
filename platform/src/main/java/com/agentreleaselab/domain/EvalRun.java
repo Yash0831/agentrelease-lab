@@ -10,6 +10,7 @@ import java.util.UUID;
 @Entity @Table(name = "eval_runs")
 public class EvalRun {
     @Id private UUID id;
+    @Column(name = "tenant_id", nullable = false) private UUID tenantId;
     @Column(name = "agent_version_id", nullable = false) private UUID agentVersionId;
     @Column(name = "dataset_id", nullable = false) private String datasetId;
     @Column(name = "scenario_id", nullable = false) private String scenarioId;
@@ -27,11 +28,13 @@ public class EvalRun {
     @Column(columnDefinition = "TEXT") private String error;
 
     protected EvalRun() {}
-    public EvalRun(UUID agentVersionId, String datasetId, String scenarioId, int trialIndex, String mode, Map<String, Object> chaos) {
-        this.id = UUID.randomUUID(); this.agentVersionId = agentVersionId; this.datasetId = datasetId;
-        this.scenarioId = scenarioId; this.trialIndex = trialIndex; this.mode = mode; this.chaos = chaos;
+    public EvalRun(UUID tenantId, UUID agentVersionId, String datasetId, String scenarioId, int trialIndex, String mode, Map<String, Object> chaos) {
+        this.id = UUID.randomUUID(); this.tenantId = tenantId; this.agentVersionId = agentVersionId;
+        this.datasetId = datasetId; this.scenarioId = scenarioId;
+        this.trialIndex = trialIndex; this.mode = mode; this.chaos = chaos;
     }
     public UUID getId() { return id; }
+    public UUID getTenantId() { return tenantId; }
     public UUID getAgentVersionId() { return agentVersionId; }
     public String getDatasetId() { return datasetId; }
     public String getScenarioId() { return scenarioId; }

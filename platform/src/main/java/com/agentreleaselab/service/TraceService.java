@@ -1,6 +1,7 @@
 package com.agentreleaselab.service;
 
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.domain.TraceEventRepository;
+import com.agentreleaselab.domain.EvalRunRepository;
 import com.agentreleaselab.domain.TraceEvent;
 import com.agentreleaselab.security.TenantContext;
 import org.springframework.stereotype.Service;
@@ -17,10 +18,13 @@ public class TraceService {
             "x-api-key", "api_key", "apikey", "authorization", "token",
             "llm_api_key", "secret", "password");
 
-    private final Repositories.TraceEventRepository events;
+    private final TraceEventRepository events;
+    private final EvalRunRepository evalRuns;
 
-    public TraceService(Repositories.TraceEventRepository events) {
+    public TraceService(TraceEventRepository events,
+                        EvalRunRepository evalRuns) {
         this.events = events;
+        this.evalRuns = evalRuns;
     }
 
     @Transactional
@@ -67,6 +71,11 @@ public class TraceService {
     }
 
     public List<TraceEvent> timeline(UUID evalRunId) {
+        // The eval run itself is tenant-scoped: a tenant can only read traces
+        // for its own runs, even if it guesses another run's ID.
+        evalRuns.findByIdAndTenantId(evalRunId, TenantContext.get().tenantId())
+                .orElseThrow(() -> ApiException.notFound("EVAL_RUN_NOT_FOUND",
+                        "No such eval run in your organization"));
         return events.findByEvalRunIdOrderByTsAscIdAsc(evalRunId);
     }
 }

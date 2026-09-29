@@ -1,10 +1,14 @@
 package com.agentreleaselab.service;
 
+import com.agentreleaselab.domain.ReleasePolicyRepository;
+import com.agentreleaselab.domain.ReleaseDecisionRepository;
+import com.agentreleaselab.domain.EvalRunRepository;
+import com.agentreleaselab.domain.AgentVersionRepository;
 import com.agentreleaselab.domain.AgentVersion;
 import com.agentreleaselab.domain.EvalRun;
 import com.agentreleaselab.domain.ReleaseDecision;
 import com.agentreleaselab.domain.ReleasePolicy;
-import com.agentreleaselab.domain.Repositories;
+import com.agentreleaselab.security.TenantContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,15 +22,15 @@ import java.util.*;
 @Service
 public class ReleaseDecisionService {
 
-    private final Repositories.EvalRunRepository evalRuns;
-    private final Repositories.AgentVersionRepository versions;
-    private final Repositories.ReleasePolicyRepository policies;
-    private final Repositories.ReleaseDecisionRepository decisions;
+    private final EvalRunRepository evalRuns;
+    private final AgentVersionRepository versions;
+    private final ReleasePolicyRepository policies;
+    private final ReleaseDecisionRepository decisions;
 
-    public ReleaseDecisionService(Repositories.EvalRunRepository evalRuns,
-                                  Repositories.AgentVersionRepository versions,
-                                  Repositories.ReleasePolicyRepository policies,
-                                  Repositories.ReleaseDecisionRepository decisions) {
+    public ReleaseDecisionService(EvalRunRepository evalRuns,
+                                  AgentVersionRepository versions,
+                                  ReleasePolicyRepository policies,
+                                  ReleaseDecisionRepository decisions) {
         this.evalRuns = evalRuns;
         this.versions = versions;
         this.policies = policies;
@@ -36,12 +40,13 @@ public class ReleaseDecisionService {
     @Transactional
     public ReleaseDecision evaluate(UUID candidateId, UUID baselineId, UUID policyId,
                                     String datasetId, String mode) {
-        AgentVersion candidate = versions.findById(candidateId)
-                .orElseThrow(() -> ApiException.notFound("VERSION_NOT_FOUND", "No such candidate version"));
-        AgentVersion baseline = versions.findById(baselineId)
-                .orElseThrow(() -> ApiException.notFound("VERSION_NOT_FOUND", "No such baseline version"));
-        ReleasePolicy policy = policies.findById(policyId)
-                .orElseThrow(() -> ApiException.notFound("POLICY_NOT_FOUND", "No such release policy"));
+        UUID tenantId = TenantContext.get().tenantId();
+        AgentVersion candidate = versions.findByIdAndTenantId(candidateId, tenantId)
+                .orElseThrow(() -> ApiException.notFound("VERSION_NOT_FOUND", "No such candidate version in your organization"));
+        AgentVersion baseline = versions.findByIdAndTenantId(baselineId, tenantId)
+                .orElseThrow(() -> ApiException.notFound("VERSION_NOT_FOUND", "No such baseline version in your organization"));
+        ReleasePolicy policy = policies.findByIdAndTenantId(policyId, tenantId)
+                .orElseThrow(() -> ApiException.notFound("POLICY_NOT_FOUND", "No such release policy in your organization"));
         Map<String, Object> t = policy.getThresholds();
 
         int minTrials = intVal(t, "min_trials_per_scenario", 3);
@@ -52,9 +57,9 @@ public class ReleaseDecisionService {
         List<String> requiredScenarios = (List<String>) t.getOrDefault("required_scenarios", List.of());
 
         List<EvalRun> candRuns = evalRuns
-                .findByAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(candidateId, datasetId, mode);
+                .findByTenantIdAndAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(tenantId, candidateId, datasetId, mode);
         List<EvalRun> baseRuns = evalRuns
-                .findByAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(baselineId, datasetId, mode);
+                .findByTenantIdAndAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(tenantId, baselineId, datasetId, mode);
 
         Map<String, List<EvalRun>> byScenario = groupBy(candRuns);
         List<String> evidenceProblems = new ArrayList<>();
@@ -137,7 +142,7 @@ public class ReleaseDecisionService {
         evidence.put("baseline_success_rates", baselineSuccess);
         evidence.put("thresholds", t);
 
-        ReleaseDecision decision = new ReleaseDecision(candidateId, baselineId, policyId, verdict, evidence);
+        ReleaseDecision decision = new ReleaseDecision(tenantId, candidateId, baselineId, policyId, verdict, evidence);
         return decisions.save(decision);
     }
 
@@ -174,8 +179,11 @@ public class ReleaseDecisionService {
 
     private double round(double v) { return Math.round(v * 1000.0) / 1000.0; }
 
-    public List<ReleaseDecision> list() { return decisions.findAllByOrderByDecidedAtDesc(); }
+    public List<ReleaseDecision> list() {
+        return decisions.findByTenantIdOrderByDecidedAtDesc(TenantContext.get().tenantId());
+    }
     public ReleaseDecision get(UUID id) {
-        return decisions.findById(id).orElseThrow(() -> ApiException.notFound("DECISION_NOT_FOUND", "No such decision"));
+        return decisions.findByIdAndTenantId(id, TenantContext.get().tenantId())
+                .orElseThrow(() -> ApiException.notFound("DECISION_NOT_FOUND", "No such decision in your organization"));
     }
 }
