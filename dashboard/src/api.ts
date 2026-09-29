@@ -19,6 +19,13 @@ const BASE: string =
   (import.meta.env.VITE_PLATFORM_URL as string | undefined) ??
   "http://localhost:8080";
 
+const WORKER_BASE: string =
+  (import.meta.env.VITE_WORKER_URL as string | undefined) ??
+  "http://localhost:8001";
+const WORKER_KEY: string =
+  (import.meta.env.VITE_WORKER_KEY as string | undefined) ??
+  "change-me-worker-key";
+
 export function getApiKey(): string {
   try {
     return localStorage.getItem(API_KEY_STORAGE) ?? DEFAULT_API_KEY;
@@ -101,3 +108,32 @@ export const api = {
   decisions: () => req<ReleaseDecisionSummary[]>("/api/release-decisions"),
   decision: (id: string) => req<ReleaseDecisionDetail>(`/api/release-decisions/${id}`),
 };
+
+export interface IncidentExplanation {
+  mode: string;
+  generated_by: string;
+  observed_facts: Record<string, unknown>;
+  configuration_changes: string[];
+  hypotheses: string[];
+  suggested_experiments: string[];
+  causal_certainty: string;
+  llm_summary?: { probabilistic: boolean; text?: string; model?: string; error?: string };
+}
+
+/** Incident explanation lives on the worker (it owns the agent loop). */
+export async function explainIncident(
+  evalRunId: string, candidate: string, baseline: string, mode: string
+): Promise<IncidentExplanation> {
+  const res = await fetch(`${WORKER_BASE}/incidents/explain`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${WORKER_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ eval_run_id: evalRunId, candidate, baseline, mode }),
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, `worker ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  return (await res.json()) as IncidentExplanation;
+}
