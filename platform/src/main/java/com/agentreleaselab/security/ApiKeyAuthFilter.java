@@ -22,6 +22,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String p = request.getRequestURI();
+        // CORS preflights carry no API key; the CORS config answers them.
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
         return p.equals("/api/health") || p.startsWith("/actuator") || !p.startsWith("/api/");
     }
 
