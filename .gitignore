@@ -1,0 +1,28 @@
+# AgentRelease Lab .gitignore
+.env
+*.log
+
+# Java
+platform/target/
+*.class
+
+# Python
+agent-worker/.venv/
+agent-worker/__pycache__/
+agent-worker/**/__pycache__/
+*.pyc
+
+# Node
+dashboard/node_modules/
+dashboard/dist/
+
+# Benchmark reports are generated artifacts; keep the directory, ignore contents
+# (one canonical report is committed explicitly via git add -f when refreshed)
+benchmarks/reports/*.json
+!benchmarks/reports/.gitkeep
+
+# Screenshots are generated; keep explicitly added ones
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

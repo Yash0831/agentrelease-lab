@@ -1,0 +1,83 @@
+# AgentRelease Lab — local development stack.
+# Versions verified 2026-09-29 against official docs:
+#   postgres: pgvector/pgvector:pg16 (PostgreSQL 16 + pgvector 0.8.x)
+#   redis: 7.4.x
+# Usage: cp .env.example .env && docker compose up --build
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agentreleaselab}
+      POSTGRES_USER: ${POSTGRES_USER:-arl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-dev-only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arl}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  platform:
+    build: ./platform
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-agentreleaselab}
+      DB_USER: ${POSTGRES_USER:-arl}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-dev-only}
+      REDIS_URL: redis://redis:6379/0
+      SEED_ADMIN_API_KEY: ${SEED_ADMIN_API_KEY:-arl-admin-demo-key}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    ports:
+      - "${PLATFORM_PORT:-8080}:8080"
+
+  worker:
+    build: ./agent-worker
+    depends_on:
+      platform:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      PLATFORM_BASE_URL: http://platform:8080
+      REDIS_URL: redis://redis:6379/0
+      WORKER_API_KEY: ${WORKER_API_KEY:-change-me-worker-key}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      EMBEDDING_MODE: ${EMBEDDING_MODE:-fixture}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    ports:
+      - "${WORKER_PORT:-8001}:8001"
+
+  dashboard:
+    build: ./dashboard
+    depends_on:
+      - platform
+    environment:
+      VITE_PLATFORM_URL: http://localhost:${PLATFORM_PORT:-8080}
+    ports:
+      - "5173:80"
+
+volumes:
+  pgdata:
+  redisdata:

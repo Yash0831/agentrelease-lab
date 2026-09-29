@@ -1,0 +1,35 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: agentrelease-lab-platform
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/agentreleaselab}
+    username: ${DB_USER:arl}
+    password: ${DB_PASSWORD:change-me-in-dev-only}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+arl:
+  seed-enabled: ${SEED_ENABLED:true}
+  seed-admin-api-key: ${SEED_ADMIN_API_KEY:arl-admin-demo-key}
+  # Tool gateway limits
+  gateway:
+    default-timeout-ms: 5000
+    max-action-budget: 25
+  datasets-dir: ${EVAL_DATASETS_DIR:../eval/datasets}
+
+logging:
+  level:
+    com.agentreleaselab: INFO
