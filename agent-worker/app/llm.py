@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 import yaml
@@ -41,7 +42,10 @@ class FixtureLLM(LLMProvider):
     inputs always produce the same outputs; no network, no tokens, zero cost.
     """
 
-    def __init__(self, fixture_path: str = "fixtures/fixture_responses.yaml"):
+    def __init__(self, fixture_path: str | None = None):
+        if fixture_path is None:
+            fixture_path = str(Path(__file__).resolve().parent.parent
+                               / "fixtures" / "fixture_responses.yaml")
         with open(fixture_path) as f:
             data = yaml.safe_load(f)
         self.scripts: dict = data.get("versions", {})

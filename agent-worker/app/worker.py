@@ -44,7 +44,8 @@ def run_job(payload: dict) -> dict:
     # Scenario list comes from the dataset definition via the platform.
     import httpx
     ds = httpx.get(f"{platform.base_url}/api/datasets/{dataset_id}",
-                   headers={"X-API-Key": platform.api_key}, timeout=15).json()
+                   headers={"X-API-Key": platform.api_key}, timeout=15,
+                   trust_env=False).json()
     scenarios = ds.get("scenarios", [])
     wanted = payload.get("scenarios")
     if wanted:

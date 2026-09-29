@@ -18,8 +18,10 @@ class PlatformClient:
         return {"X-API-Key": self.api_key, "Content-Type": "application/json"}
 
     def _req(self, method: str, path: str, **kwargs) -> httpx.Response:
+        # The platform is a direct local service: never route through an
+        # egress proxy (and never let a malformed proxy env break calls).
         r = httpx.request(method, self.base_url + path, headers=self._headers(),
-                          timeout=self.timeout_s, **kwargs)
+                          timeout=self.timeout_s, trust_env=False, **kwargs)
         if r.status_code >= 400:
             # Surface the platform's machine-readable error envelope.
             try:
@@ -48,6 +50,9 @@ class PlatformClient:
         return self._req("PATCH", f"/api/eval-runs/{run_id}",
                          json={"status": status, "metrics": metrics,
                                "error": error}).json()
+
+    def get_eval_run(self, run_id: str) -> dict:
+        return self._req("GET", f"/api/eval-runs/{run_id}").json()
 
     # ---- traces ----
     def trace_events(self, eval_run_id: str, events: list[dict]) -> dict:

@@ -90,8 +90,9 @@ class Ctx:
 
     def p(self, method: str, path: str, key: str | None = None, **kw):
         headers = {"X-API-Key": key or self.agent_key}
+        # Both services are local: never route through an egress proxy.
         r = httpx.request(method, self.platform + path, headers=headers,
-                          timeout=30, **kw)
+                          timeout=30, trust_env=False, **kw)
         if r.status_code >= 400:
             raise RuntimeError(f"{method} {path} -> {r.status_code}: {r.text[:300]}")
         return r.json()
@@ -99,7 +100,7 @@ class Ctx:
     def w(self, method: str, path: str, **kw):
         headers = {"Authorization": f"Bearer {self.worker_key}"}
         r = httpx.request(method, self.worker + path, headers=headers,
-                          timeout=600, **kw)
+                          timeout=600, trust_env=False, **kw)
         if r.status_code >= 400:
             raise RuntimeError(f"{method} {path} -> {r.status_code}: {r.text[:300]}")
         return r.json()
@@ -224,19 +225,21 @@ def main() -> int:
               any("critical" in b.lower() for b in d1["evidence"]["blockers"]),
               str(d1["evidence"]["blockers"])[:160])
 
-    print("== matrix 2: baseline vs candidate-fixed (expect PASS) ==")
-    job2 = run_matrix(ctx, ["baseline", "candidate-fixed"], mode)
+    print("== matrix 2: candidate-fixed only, baseline reused (expect PASS) ==")
+    # Baseline trials already exist from matrix 1; re-running them would
+    # collide with the (version, dataset, scenario, trial, mode) uniqueness.
+    job2 = run_matrix(ctx, ["candidate-fixed"], mode)
     d2 = evaluate(ctx, versions, "candidate-fixed", "baseline", "default", mode)
     ctx.check("fixed candidate PASSES", d2["verdict"] == "PASS",
               f"got {d2['verdict']}")
 
-    print("== matrix 3: regression probe (expect FAIL for regressed) ==")
+    print("== matrix 3: regression probe, candidate-regressed only (expect FAIL) ==")
     ctx.p("POST", "/api/release-policies", json={
         "name": "regression-only",
         "thresholds": {"min_trials_per_scenario": 2, "min_task_success_rate": 0.9,
                        "max_p95_latency_ms": 30000, "max_cost_per_run_usd": 0.50,
                        "required_scenarios": ["regression-set", "happy-path-vpn"]}})
-    job3 = run_matrix(ctx, ["baseline", "candidate-regressed"], mode,
+    job3 = run_matrix(ctx, ["candidate-regressed"], mode,
                       scenarios=["regression-set", "happy-path-vpn"])
     d3 = evaluate(ctx, versions, "candidate-regressed", "baseline",
                   "regression-only", mode)

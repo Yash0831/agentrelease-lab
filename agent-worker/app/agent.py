@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import time
 import uuid
+from pathlib import Path
 
 from .config import settings
 from .llm import FixtureLLM, LiveLLM, call_with_retries
@@ -30,9 +31,15 @@ Rules:
 
 class AgentRunner:
     def __init__(self, platform: PlatformClient, provider=None,
-                 fixture_path: str = "fixtures/fixture_responses.yaml"):
+                 fixture_path: str | None = None):
         self.platform = platform
         self._provider = provider
+        if fixture_path is None:
+            candidate = Path("fixtures/fixture_responses.yaml")
+            if not candidate.exists():
+                candidate = (Path(__file__).resolve().parent.parent
+                             / "fixtures" / "fixture_responses.yaml")
+            fixture_path = str(candidate)
         self._fixture_path = fixture_path
         self.events: list[dict] = []          # buffered trace events
         self.retrieved_hits: list[dict] = []  # for citation validation
