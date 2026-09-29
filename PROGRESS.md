@@ -44,17 +44,23 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
 
 ## Tested (2026-09-29, sandbox)
 
-- Backend: `mvn -o test` — **28/28 green** (ApprovalWorkflowTest 5, FingerprintTest 4,
-  TenantIsolationTest 6, GatewayTest 8, ReleaseGateTest 4, ApprovalRoundTripTest 1).
-  Includes the non-transactional fingerprint round-trip regression test.
-- Worker: `pytest` — **16/16 green** (queue test ran, not skipped).
-- Dashboard: `npm run build` clean; 48 modules transformed.
+- Backend: `mvn -o test` — **30/30 green** (CorsPreflightTest 2, ApprovalWorkflowTest 5,
+  FingerprintTest 4, TenantIsolationTest 6, GatewayTest 8, ReleaseGateTest 4,
+  ApprovalRoundTripTest 1).
+  Includes the non-transactional fingerprint round-trip regression test and
+  CORS preflight tests (OPTIONS bypasses auth; GET without key still 401).
+- Worker: `pytest` — **16/16 green**.
+- Dashboard: `npm run build` clean; 48 modules transformed. Rendered live via
+  headless Chromium (CDP Fetch-domain proxying — see scripts/capture_screenshots.py);
+  screenshots in `screenshots/` show real data on Overview/Versions/Compare/Decisions.
 - Benchmark (fixture mode, labeled on every run/metric/report): **6/6 assertions** —
-  flawed → BLOCKED (critical policy failure cited), fixed → PASS,
+  flawed → BLOCKED (critical policy failure cited with concrete counts), fixed → PASS,
   regressed → FAIL, approval executed exactly once with replay rejected.
-  Report: `benchmarks/reports/eval-report-fixture-20260929-164517.json`.
-- Live end-to-end: platform :8080, worker :8001, dashboard static server :5173 all
+  Report: `benchmarks/reports/eval-report-fixture-20260929-165151.json`.
+- Live end-to-end: platform :8080, worker :8001, dashboard :5173 all
   running; seed data (Acme/Globex tenants, demo users incl. dave-newhire) loads.
+- CORS: platform answers preflights (`Access-Control-Allow-Origin: *`, configurable
+  via ARL_CORS_ALLOWED_ORIGINS); auth filter skips OPTIONS. Verified live.
 
 ## Bugs found and fixed during testing
 
@@ -76,17 +82,14 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
 
 ## Remaining
 
-- Dashboard: verify live rendering via real browser screenshots; verify CORS
-  against the API.
 - Docker/Compose: untested (platform dataset path, worker price-table path,
   dashboard Vite build args, root `db/` deliverable).
 - True concurrency test for approval execution (row lock is wired, race test missing).
 - Idempotency-key mismatch conflict (same key + different args → stable conflict).
-- License inconsistency: CONTRIBUTING says Apache-2.0; LICENSE/README say MIT.
 - `git remote add origin <url>` + push — requires explicit authorization; no push performed.
 - Sandbox-specific `[::1]` JDBC URL defaults need review before committing
   (use an environment/profile override instead).
-- Commit the uncommitted work as logical milestones.
+- CI workflow (`.github/workflows/ci.yml`) exists but never ran on a runner.
 
 ## Known gaps / honest limitations
 
