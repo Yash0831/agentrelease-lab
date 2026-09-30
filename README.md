@@ -117,14 +117,13 @@ screenshots/     captured from the running application
   model's nondeterministic behavior.
 - See `docs/LIMITATIONS.md` and `docs/THREAT_MODEL.md`.
 
-## Publishing
+## Repository & CI
 
-The local git repository is complete and verified. To publish (requires your
-explicit go-ahead — no push has been performed):
-```bash
-git remote add origin <your-repo-url>
-git push -u origin main
-```
+Public repository: https://github.com/Yash0831/agentrelease-lab
+
+GitHub Actions runs the full pipeline on every push: platform tests, worker
+tests, dashboard build, and the fixture-mode evaluation matrix (the
+release-decision job). CI is green on `main`.
 
 ## License
 

@@ -7,11 +7,11 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
 
 | # | Increment | Status | Verified how |
 |---|-----------|--------|--------------|
-| 1 | Local env, DB migrations, auth, tenant isolation | DONE | Flyway migrations on PostgreSQL 16 + pgvector; 28/28 JUnit tests green |
+| 1 | Local env, DB migrations, auth, tenant isolation | DONE | Flyway migrations on PostgreSQL 16 + pgvector; 30/30 JUnit tests green |
 | 2 | Service desk APIs, permission-aware retrieval, agent worker | DONE | JUnit + pytest; worker executes fixture tool loop vs live backend |
 | 3 | Trace capture and evaluation runner | DONE | Trace events persisted; benchmark writes metrics report JSON |
 | 4 | Failure injection + baseline/candidate comparisons | DONE | Chaos scenarios exercised in benchmark; flawed → BLOCKED, regressed → FAIL |
-| 5 | Release gates, dashboard, CI integration | PARTIAL | Release decision endpoint verified via benchmark; dashboard builds, live-API rendering not yet screenshot-verified; CI workflow file exists, not yet run |
+| 5 | Release gates, dashboard, CI integration | DONE | Release decision endpoint verified via benchmark; dashboard screenshots captured against the live API; CI ran green on a GitHub-hosted runner (platform, worker, dashboard, release-decision jobs) |
 
 ## Implemented
 
@@ -32,13 +32,14 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
   LLM judge optional and labeled probabilistic).
 - Dashboard (React 18 + TypeScript + Vite): versions, datasets, baseline-vs-candidate
   comparison, trace timeline, failure details, approval queue, release decision.
-  `npm run build` clean. Live rendering against the real API not yet verified
-  (browser screenshots pending).
+  `npm run build` clean. Rendering verified against the live API via headless
+  Chromium; screenshots in `screenshots/` show real data.
 - Eval datasets: `eval/datasets/*.json` with provenance + expected outcomes.
 - Failure injection lab: chaos scenarios documented in `eval/scenarios/`.
 - Benchmark: `benchmarks/run_eval.py` drives baseline vs candidates, writes
   machine-readable report to `benchmarks/reports/`.
-- CI: `.github/workflows/ci.yml` exists; never executed (no runner available here).
+- CI: `.github/workflows/ci.yml` ran green on a GitHub-hosted runner 2026-09-29
+  (platform tests, worker tests, dashboard build, fixture-mode evaluation).
 - Docs: README, ARCHITECTURE, THREAT_MODEL, LIMITATIONS, API, ADRs, dataset
   provenance, CONTRIBUTING.
 
@@ -86,14 +87,12 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
   dashboard Vite build args, root `db/` deliverable).
 - True concurrency test for approval execution (row lock is wired, race test missing).
 - Idempotency-key mismatch conflict (same key + different args → stable conflict).
-- `git remote add origin <url>` + push — requires explicit authorization; no push performed.
-- Sandbox-specific `[::1]` JDBC URL defaults need review before committing
-  (use an environment/profile override instead).
-- CI workflow (`.github/workflows/ci.yml`) exists but never ran on a runner.
+- Live-LLM path: wired but never exercised against a real model (also needs the
+  ```tool_call convention added to the agent system prompt — see agent-worker/app/agent.py).
 
 ## Known gaps / honest limitations
 
 See `docs/LIMITATIONS.md`. Headline items: fixture embeddings are hash-based
 (labeled); live-LLM path never ran against a real model here; dashboard demo data
 is synthetic (labeled DEMO); no real customer data anywhere; latency numbers
-reflect a local sandbox, not production; CI workflow file exists but never ran.
+reflect a local sandbox, not production.
