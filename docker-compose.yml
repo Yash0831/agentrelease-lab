@@ -34,7 +34,9 @@ services:
       retries: 10
 
   platform:
-    build: ./platform
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,12 +51,20 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "${PLATFORM_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
 
   worker:
-    build: ./agent-worker
+    build:
+      context: .
+      dockerfile: agent-worker/Dockerfile
     depends_on:
       platform:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -70,11 +80,13 @@ services:
       - "${WORKER_PORT:-8001}:8001"
 
   dashboard:
-    build: ./dashboard
+    build:
+      context: ./dashboard
+      args:
+        VITE_PLATFORM_URL: http://localhost:${PLATFORM_PORT:-8080}
     depends_on:
-      - platform
-    environment:
-      VITE_PLATFORM_URL: http://localhost:${PLATFORM_PORT:-8080}
+      platform:
+        condition: service_healthy
     ports:
       - "5173:80"
 
