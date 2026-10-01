@@ -39,7 +39,9 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
 - Benchmark: `benchmarks/run_eval.py` drives baseline vs candidates, writes
   machine-readable report to `benchmarks/reports/`.
 - CI: `.github/workflows/ci.yml` ran green on a GitHub-hosted runner 2026-09-29
-  (platform tests, worker tests, dashboard build, fixture-mode evaluation).
+  (platform tests, worker tests, dashboard build, fixture-mode evaluation);
+  re-verified green on every subsequent push (platform, worker, dashboard,
+  release-decision jobs).
 - Docs: README, ARCHITECTURE, THREAT_MODEL, LIMITATIONS, API, ADRs, dataset
   provenance, CONTRIBUTING.
 
@@ -95,20 +97,33 @@ implemented, tested, and committed.
 | A5 | Docker packaging/readiness | DONE | Platform + worker Dockerfiles use repo-root context; datasets and price table copied in; `EVAL_DATASETS_DIR`/`ARL_PRICE_TABLE` set; curl installed; `/api/health` and `/health` healthchecks; compose uses build args for `VITE_PLATFORM_URL`; worker/dashboard wait for healthy platform. **Runtime NOT verified here** — no Docker daemon in this sandbox. |
 | A6 | Recorded-response replay | DONE | `TurnRecorder` writes JSON recordings bound to version fingerprint/scenario/trial; `ReplayLLM` reads without provider networking; rejects missing/invalid/incompatible/truncated recordings; networking-disabled tests verify no HTTP provider call. Tests: `agent-worker/tests/test_replay.py`. |
 | A7 | Idempotency + job hardening | DONE | Same idempotency key + different tool/args → auditable `CONFLICT` with `IDEMPOTENCY_KEY_CONFLICT` (V6 migration); `ConcurrencyTest.java`; atomic Lua enqueue dedup; processing leases; abandoned-job recovery; heartbeats; per-trial completion records; worker skips completed trials. Queue tests for atomic enqueue, abandoned recovery, trial completion. |
-| A8 | Runtime fixes (benchmark) | DONE | `JobRequest.batch_id` propagation (see A4); `FixtureResetService` breaks `tool_calls → approvals` FK before deleting approvals; approval demo creates its own request when no pending approval survives fixture resets. **Benchmark 6/6**: flawed → BLOCKED, fixed → PASS, regressed → FAIL, approval exactly-once. Report: `benchmarks/reports/eval-report-fixture-20260930-192332.json`. |
+| A8 | Runtime fixes (benchmark) | DONE | `JobRequest.batch_id` propagation (see A4); `FixtureResetService` breaks `tool_calls → approvals` FK before deleting approvals; approval demo creates its own request when no pending approval survives fixture resets. **Benchmark 6/6**: flawed → BLOCKED, fixed → PASS, regressed → FAIL, approval exactly-once. Latest report: `benchmarks/reports/eval-report-fixture-20260930-232611.json`. |
 
-## Tested (2026-09-30, sandbox)
+## Follow-up fixes (2026-10-01)
 
-- Backend: `mvn -o test` — **42/42 green** (ReleaseGateTest 12 incl. batch
-  isolation, fail-closed policy, and baseline-evidence tests; ConcurrencyTest 4
-  incl. mutating-tool and approval-execution races; GatewayTest 8;
-  TenantIsolationTest 6; ApprovalWorkflowTest 5; FingerprintTest 4;
-  CorsPreflightTest 2; ApprovalRoundTripTest 1).
-- Worker: `pytest` — **51/51 green** (adds test_agent_replay.py with 11 replay/
-  loop regression tests; test_replay.py; queue tests; LLM config tests).
-  0 skipped (Redis available).
+| # | Increment | Status | Verified how |
+|---|-----------|--------|--------------|
+| F1 | Replay evidence preservation | DONE | Schema-2 recordings preserve model citations, per-tool status, error codes, and sanitized error messages end to end (gateway → recording → replay). Schema-1 recordings are rejected explicitly instead of replaying with fabricated empty evidence. Tests: citation round-trip, error-field playback, legacy-schema rejection, error-message sanitization, full AgentRunner record→replay round trip with networking disabled (no live model calls, no platform tool calls). |
+| F2 | Strict release-gate input validation | DONE | `evidenceProblem` validates every finished run: mandatory metrics present and non-null, booleans are actual booleans, numerics are finite and nonnegative, recognized terminal status, evidence marked complete. Thresholds must be finite numbers of the right shape (integers where integral); wrong types and NaN are rejected as `INVALID_THRESHOLD`. No zero-substitution anywhere. Tests: DB-backed null/wrong-type/negative/non-terminal/invalid-baseline cases → `INSUFFICIENT_EVIDENCE`; direct validator tests for NaN/Infinity metrics and thresholds; valid runs still decide PASS/BLOCKED/FAIL. |
+| F3 | Documentation reconciliation | DONE | Removed stale "Remaining" entries (concurrency tests now exist); corrected test counts, class names, and benchmark report links; verification status distinguishes locally verified / CI-verified / skipped / unverified. |
+
+## Tested (2026-10-01, sandbox)
+
+- Backend: `mvn -o test` — **66/66 green** (ReleaseGateTest 19 incl. null/wrong-type/
+  negative/non-terminal evidence and baseline-evidence tests; new
+  ReleaseGateValidationTest 17 incl. NaN/Infinity metric and threshold tests;
+  ConcurrencyTest 4 incl. mutating-tool and approval-execution races;
+  GatewayTest 8; TenantIsolationTest 6; ApprovalWorkflowTest 5;
+  FingerprintTest 4; CorsPreflightTest 2; ApprovalRoundTripTest 1).
+  0 skipped. Java 21, PostgreSQL 16 + pgvector.
+- Worker: `pytest` — **56/56 green**, 0 skipped (Redis available; 4 queue tests
+  that previously skipped on missing Redis now run). Adds
+  test_agent_replay.py replay/loop/evidence regression tests (citation and
+  error-field preservation, schema-1 legacy rejection, AgentRunner
+  record→replay round trip) and ReleaseGateValidationTest-adjacent worker
+  coverage; test_replay.py; queue tests; LLM config tests.
 - Dashboard: `npm run build` clean; TypeScript check passes.
-- Benchmark (fixture mode, labeled): **6/6 assertions** — flawed → BLOCKED (3 critical policy failures), fixed → PASS, regressed → FAIL, approval executed once with replay rejected. Batch `bench-fixture-20260930-192057-5f1d6c`.
+- Benchmark (fixture mode, labeled): **6/6 assertions** — flawed → BLOCKED (3 critical policy failures), fixed → PASS, regressed → FAIL, approval executed once with replay rejected. Batch `bench-fixture-20260930-232331-3208cd`. Report: `benchmarks/reports/eval-report-fixture-20260930-232611.json`.
 - Docker Compose: **NOT verified** — no Docker daemon in this sandbox. Config reviewed (YAML parses, COPY sources exist, healthchecks wired).
 - Live provider: **NOT verified** — no `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` in this environment. Native tool calling is implemented and unit-tested only.
 
@@ -117,8 +132,6 @@ implemented, tested, and committed.
 - Live-LLM path: native tool calling implemented and unit-tested, but never exercised
   against a real model here (no `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` in this environment).
 - Docker Compose runtime: config fixed but not executed (no Docker daemon here).
-- True concurrency test for approval execution (row lock is wired, race test still missing).
-- Concurrent mutating-tool idempotency race (current test uses a read-only tool).
 
 ## Known gaps / honest limitations
 

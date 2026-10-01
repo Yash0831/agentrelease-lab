@@ -72,6 +72,12 @@ class ReleaseGateTest extends ServiceTestBase {
         runs.finish(r.getId(), "SUCCEEDED", metrics(completed, critical, 1200), null);
     }
 
+    private void trialWithMetrics(AgentVersion v, String scenario, int idx,
+                                  Map<String, Object> m, String status, String batchId) {
+        EvalRun r = runs.create(v.getId(), "ds-test", scenario, idx, "fixture", Map.of(), batchId);
+        runs.finish(r.getId(), status, m, null);
+    }
+
     @Test
     void criticalFailureBlocksRegardlessOfAverages() {
         asUser(ACME_AGENT);
@@ -275,5 +281,123 @@ class ReleaseGateTest extends ServiceTestBase {
         ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-base");
         assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
         assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("baseline scenario 's1'");
+    }
+
+    @Test
+    void nullMetricValueAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-null-" + UUID.randomUUID());
+        AgentVersion base = version("base-null-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-null-" + UUID.randomUUID(), 2, List.of("s1"));
+        Map<String, Object> bad = metrics(true, false, 1200);
+        bad.put("latency_ms", null); // null is not a measurement
+        trialWithMetrics(cand, "s1", 0, bad, "SUCCEEDED", "batch-null");
+        trialWithMetrics(cand, "s1", 1, metrics(true, false, 1200), "SUCCEEDED", "batch-null");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-null");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("latency_ms");
+    }
+
+    @Test
+    void wrongTypeMetricAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-type-" + UUID.randomUUID());
+        AgentVersion base = version("base-type-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-type-" + UUID.randomUUID(), 2, List.of("s1"));
+        Map<String, Object> bad = metrics(true, false, 1200);
+        bad.put("task_completed", "true"); // String is not a boolean
+        trialWithMetrics(cand, "s1", 0, bad, "SUCCEEDED", "batch-type");
+        trialWithMetrics(cand, "s1", 1, metrics(true, false, 1200), "SUCCEEDED", "batch-type");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-type");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("must be a boolean");
+    }
+
+    @Test
+    void negativeLatencyAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-neg-" + UUID.randomUUID());
+        AgentVersion base = version("base-neg-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-neg-" + UUID.randomUUID(), 2, List.of("s1"));
+        Map<String, Object> bad = metrics(true, false, 1200);
+        bad.put("latency_ms", -5); // latency cannot be negative
+        trialWithMetrics(cand, "s1", 0, bad, "SUCCEEDED", "batch-neg");
+        trialWithMetrics(cand, "s1", 1, metrics(true, false, 1200), "SUCCEEDED", "batch-neg");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-neg");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("latency_ms");
+    }
+
+    @Test
+    void nonTerminalCandidateRunAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-nonterm-" + UUID.randomUUID());
+        AgentVersion base = version("base-nonterm-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-nonterm-" + UUID.randomUUID(), 2, List.of("s1"));
+        trialWithMetrics(cand, "s1", 0, metrics(true, false, 1200), "RUNNING", "batch-nonterm");
+        trialWithMetrics(cand, "s1", 1, metrics(true, false, 1200), "SUCCEEDED", "batch-nonterm");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-nonterm");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("not a recognized terminal status");
+    }
+
+    @Test
+    void invalidBaselineEvidenceAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-binv-" + UUID.randomUUID());
+        AgentVersion base = version("base-binv-" + UUID.randomUUID());
+        UUID tenantId = TenantContext.get().tenantId();
+        ReleasePolicy p = policies.save(new ReleasePolicy(tenantId, "pol-binv-" + UUID.randomUUID(), Map.of(
+                "min_trials_per_scenario", 2,
+                "min_task_success_rate", 0.8,
+                "max_p95_latency_ms", 30000,
+                "max_cost_per_run_usd", 0.50,
+                "required_scenarios", List.of("s1"),
+                "max_baseline_regression", 0.1,
+                "min_baseline_trials_per_scenario", 2)));
+        trial(cand, "s1", 0, true, false, "batch-binv");
+        trial(cand, "s1", 1, true, false, "batch-binv");
+        Map<String, Object> bad = metrics(true, false, 1200);
+        bad.put("estimated_cost_usd", "cheap"); // wrong type in baseline evidence
+        trialWithMetrics(base, "s1", 0, bad, "SUCCEEDED", "batch-binv");
+        trialWithMetrics(base, "s1", 1, metrics(true, false, 1200), "SUCCEEDED", "batch-binv");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-binv");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("baseline scenario 's1'");
+    }
+
+    @Test
+    void stringThresholdRejected() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-sthr-" + UUID.randomUUID());
+        AgentVersion base = version("base-sthr-" + UUID.randomUUID());
+        UUID tenantId = TenantContext.get().tenantId();
+        Map<String, Object> thresholds = new HashMap<>();
+        thresholds.put("min_trials_per_scenario", 2);
+        thresholds.put("min_task_success_rate", "high"); // not a number
+        thresholds.put("max_p95_latency_ms", 30000);
+        thresholds.put("max_cost_per_run_usd", 0.50);
+        thresholds.put("required_scenarios", List.of("s1"));
+        ReleasePolicy bad = policies.save(new ReleasePolicy(tenantId, "pol-sthr-" + UUID.randomUUID(), thresholds));
+        assertThatThrownBy(() -> gate.evaluate(cand.getId(), base.getId(), bad.getId(), "ds-test", "fixture", "batch-sthr"))
+                .isInstanceOf(ApiException.class)
+                .matches(e -> ((ApiException) e).getCode().equals("INVALID_THRESHOLD"));
+    }
+
+    @Test
+    void nonIntegerTrialsThresholdRejected() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-ithr-" + UUID.randomUUID());
+        AgentVersion base = version("base-ithr-" + UUID.randomUUID());
+        UUID tenantId = TenantContext.get().tenantId();
+        ReleasePolicy bad = policies.save(new ReleasePolicy(tenantId, "pol-ithr-" + UUID.randomUUID(), Map.of(
+                "min_trials_per_scenario", 2.5, // not an integer
+                "min_task_success_rate", 0.8,
+                "max_p95_latency_ms", 30000,
+                "max_cost_per_run_usd", 0.50,
+                "required_scenarios", List.of("s1"))));
+        assertThatThrownBy(() -> gate.evaluate(cand.getId(), base.getId(), bad.getId(), "ds-test", "fixture", "batch-ithr"))
+                .isInstanceOf(ApiException.class)
+                .matches(e -> ((ApiException) e).getCode().equals("INVALID_THRESHOLD"));
     }
 }

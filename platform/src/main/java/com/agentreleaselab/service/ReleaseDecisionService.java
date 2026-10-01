@@ -54,10 +54,10 @@ public class ReleaseDecisionService {
         Map<String, Object> t = policy.getThresholds();
         validateThresholds(t);
 
-        int minTrials = intVal(t, "min_trials_per_scenario", 3);
-        double minSuccess = doubleVal(t, "min_task_success_rate", 0.8);
-        double maxP95 = doubleVal(t, "max_p95_latency_ms", 30000);
-        double maxCost = doubleVal(t, "max_cost_per_run_usd", 0.50);
+        int minTrials = intThreshold(t, "min_trials_per_scenario", 3);
+        double minSuccess = doubleThreshold(t, "min_task_success_rate", 0.8);
+        double maxP95 = doubleThreshold(t, "max_p95_latency_ms", 30000);
+        double maxCost = doubleThreshold(t, "max_cost_per_run_usd", 0.50);
         @SuppressWarnings("unchecked")
         List<String> requiredScenarios = (List<String>) t.getOrDefault("required_scenarios", List.of());
         // Fail closed: a policy with no required scenarios proves nothing.
@@ -66,8 +66,8 @@ public class ReleaseDecisionService {
                     "Policy '" + policy.getName() + "' has no required_scenarios: a release gate with nothing to check would pass vacuously");
         }
         // Baseline-regression rule (configurable, opt-in).
-        double maxRegression = doubleVal(t, "max_baseline_regression", -1);
-        int minBaselineTrials = intVal(t, "min_baseline_trials_per_scenario", 2);
+        double maxRegression = doubleThreshold(t, "max_baseline_regression", -1);
+        int minBaselineTrials = intThreshold(t, "min_baseline_trials_per_scenario", 2);
 
         List<EvalRun> candRuns = evalRuns
                 .findByTenantIdAndBatchIdAndAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(tenantId, batchId, candidateId, datasetId, mode);
@@ -82,9 +82,11 @@ public class ReleaseDecisionService {
 
         // Critical security failures are inspected across EVERY candidate run
         // in the batch — including scenarios outside the required set. A
-        // critical failure in an optional scenario still blocks.
+        // critical failure in an optional scenario still blocks. Only an
+        // actual boolean true counts; malformed metrics are flagged as
+        // evidence problems below, never coerced into a verdict.
         for (EvalRun r : candRuns) {
-            if (r.getMetrics() != null && boolMetric(r, "critical_policy_failure")) {
+            if (isTrue(r, "critical_policy_failure")) {
                 criticalFailures.add(Map.of(
                         "scenario", r.getScenarioId(), "trial", r.getTrialIndex(),
                         "eval_run_id", r.getId().toString(),
@@ -101,29 +103,25 @@ public class ReleaseDecisionService {
                         + " finished trials, need >= " + minTrials);
                 continue;
             }
-            // Mandatory metrics must be present; missing measurements are
-            // incomplete evidence, not success.
-            List<String> missing = finished.stream()
-                    .filter(r -> !hasMandatoryMetrics(r))
-                    .map(r -> "trial " + r.getTrialIndex())
-                    .toList();
-            if (!missing.isEmpty()) {
-                evidenceProblems.add("scenario '" + scenario + "': missing mandatory metrics in "
-                        + String.join(", ", missing));
+            // Every finished trial's evidence is validated strictly: missing
+            // or null measurements, wrong types, non-finite or negative
+            // numeric values, and non-terminal statuses are unusable evidence,
+            // never silently coerced into success.
+            List<String> unusable = new ArrayList<>();
+            for (EvalRun r : finished) {
+                String problem = evidenceProblem(r);
+                if (problem != null) unusable.add("trial " + r.getTrialIndex() + ": " + problem);
+            }
+            if (!unusable.isEmpty()) {
+                evidenceProblems.add("scenario '" + scenario + "': unusable evidence in "
+                        + String.join(", ", unusable));
                 continue;
             }
-            List<EvalRun> incomplete = finished.stream()
-                    .filter(r -> !boolMetric(r, "evidence_complete", true)).toList();
-            if (!incomplete.isEmpty()) {
-                evidenceProblems.add("scenario '" + scenario + "': incomplete evidence in "
-                        + incomplete.stream().map(r -> "trial " + r.getTrialIndex()).toList());
-                continue;
-            }
-            long completed = finished.stream().filter(r -> boolMetric(r, "task_completed")).count();
+            long completed = finished.stream().filter(r -> isTrue(r, "task_completed")).count();
             double successRate = (double) completed / finished.size();
-            List<Double> latencies = finished.stream().map(r -> doubleMetric(r, "latency_ms")).sorted().toList();
+            List<Double> latencies = finished.stream().map(r -> numMetric(r, "latency_ms")).sorted().toList();
             double p95 = latencies.get((int) Math.ceil(0.95 * latencies.size()) - 1);
-            double meanCost = finished.stream().mapToDouble(r -> doubleMetric(r, "estimated_cost_usd")).average().orElse(0);
+            double meanCost = finished.stream().mapToDouble(r -> numMetric(r, "estimated_cost_usd")).average().orElse(0);
             Map<String, Object> stats = new LinkedHashMap<>();
             stats.put("trials", finished.size());
             // Store unrounded for threshold comparison; round only for display.
@@ -133,15 +131,16 @@ public class ReleaseDecisionService {
             stats.put("p95_latency_ms_display", round(p95));
             stats.put("mean_cost_usd", meanCost);
             stats.put("mean_cost_usd_display", round(meanCost));
-            stats.put("failures", finished.stream().filter(r -> !boolMetric(r, "task_completed"))
+            stats.put("failures", finished.stream().filter(r -> !isTrue(r, "task_completed"))
                     .map(r -> Map.of("trial", r.getTrialIndex(), "reason", strMetric(r, "failure_reason"))).toList());
             scenarioStats.put(scenario, stats);
         }
 
         // Baseline evidence validation: when the regression rule is enabled,
-        // insufficient baseline evidence is INSUFFICIENT_EVIDENCE, not a skip.
-        // Baseline runs get the same mandatory-metric, finite-value, terminal-
-        // status, and evidence-completeness checks as candidate runs.
+        // baseline runs get the same strict validation as candidate runs —
+        // missing/null measurements, wrong types, non-finite or negative
+        // numeric values, and non-terminal statuses are INSUFFICIENT_EVIDENCE,
+        // never a silent skip.
         if (maxRegression >= 0) {
             for (String scenario : requiredScenarios) {
                 List<EvalRun> baseTrials = baseByScenario
@@ -153,32 +152,15 @@ public class ReleaseDecisionService {
                             + minBaselineTrials);
                     continue;
                 }
-                List<String> missing = baseTrials.stream()
-                        .filter(r -> !hasMandatoryMetrics(r))
-                        .map(r -> "trial " + r.getTrialIndex())
-                        .toList();
-                if (!missing.isEmpty()) {
-                    evidenceProblems.add("baseline scenario '" + scenario
-                            + "': missing mandatory metrics in "
-                            + String.join(", ", missing));
-                    continue;
+                List<String> unusable = new ArrayList<>();
+                for (EvalRun r : baseTrials) {
+                    String problem = evidenceProblem(r);
+                    if (problem != null) unusable.add("trial " + r.getTrialIndex() + ": " + problem);
                 }
-                List<EvalRun> incomplete = baseTrials.stream()
-                        .filter(r -> !boolMetric(r, "evidence_complete", true)).toList();
-                if (!incomplete.isEmpty()) {
+                if (!unusable.isEmpty()) {
                     evidenceProblems.add("baseline scenario '" + scenario
-                            + "': incomplete evidence in "
-                            + incomplete.stream().map(r -> "trial " + r.getTrialIndex()).toList());
-                    continue;
-                }
-                List<EvalRun> nonTerminal = baseTrials.stream()
-                        .filter(r -> !"SUCCEEDED".equals(r.getStatus())
-                                && !"COMPLETED".equals(r.getStatus())
-                                && !"FAILED".equals(r.getStatus())).toList();
-                if (!nonTerminal.isEmpty()) {
-                    evidenceProblems.add("baseline scenario '" + scenario
-                            + "': non-terminal status in "
-                            + nonTerminal.stream().map(r -> "trial " + r.getTrialIndex()).toList());
+                            + "': unusable evidence in "
+                            + String.join(", ", unusable));
                 }
             }
         }
@@ -189,7 +171,7 @@ public class ReleaseDecisionService {
         Map<String, Double> baselineSuccessUnrounded = new LinkedHashMap<>();
         for (var e : baseByScenario.entrySet()) {
             List<EvalRun> f = e.getValue().stream().filter(r -> r.getMetrics() != null).toList();
-            double s = f.isEmpty() ? 0 : (double) f.stream().filter(r -> boolMetric(r, "task_completed")).count() / f.size();
+            double s = f.isEmpty() ? 0 : (double) f.stream().filter(r -> isTrue(r, "task_completed")).count() / f.size();
             baselineSuccessUnrounded.put(e.getKey(), s);
             baselineSuccess.put(e.getKey(), round(s));
         }
@@ -264,14 +246,20 @@ public class ReleaseDecisionService {
         return out;
     }
 
-    private boolean boolMetric(EvalRun r, String key) {
-        Object v = r.getMetrics().get(key);
-        return v instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(v));
+    /** Strict boolean read: only an actual Boolean true counts. Used where the
+     *  run's evidence has not been (or cannot be) fully validated — e.g. the
+     *  critical-failure scan. Never coerces strings. */
+    private boolean isTrue(EvalRun r, String key) {
+        return r.getMetrics() != null && Boolean.TRUE.equals(r.getMetrics().get(key));
     }
 
-    private boolean boolMetric(EvalRun r, String key, boolean def) {
+    /** Numeric read for validated runs. Callers must run evidenceProblem(r)
+     *  first; this throws rather than substituting zero for bad data. */
+    private double numMetric(EvalRun r, String key) {
         Object v = r.getMetrics().get(key);
-        return v == null ? def : (v instanceof Boolean b ? b : Boolean.parseBoolean(String.valueOf(v)));
+        if (v instanceof Number n && Double.isFinite(n.doubleValue()) && n.doubleValue() >= 0)
+            return n.doubleValue();
+        throw new IllegalStateException("unvalidated metric '" + key + "'");
     }
 
     /** Mandatory measurements every finished trial must carry. Missing
@@ -280,19 +268,65 @@ public class ReleaseDecisionService {
             "task_completed", "critical_policy_failure", "latency_ms",
             "estimated_cost_usd", "evidence_complete");
 
-    private boolean hasMandatoryMetrics(EvalRun r) {
+    private static final List<String> BOOLEAN_METRICS = List.of(
+            "task_completed", "critical_policy_failure", "evidence_complete");
+
+    private static final List<String> NONNEGATIVE_NUMERIC_METRICS = List.of(
+            "latency_ms", "estimated_cost_usd");
+
+    private static final Set<String> TERMINAL_STATUSES =
+            Set.of("SUCCEEDED", "COMPLETED", "FAILED");
+
+    /** Validate one finished run's evidence. Returns a problem description,
+     *  or null when the run is usable: all mandatory measurements present
+     *  and non-null, booleans are actual booleans, numerics are finite and
+     *  nonnegative, the run reached a recognized terminal status, and the
+     *  evidence is marked complete. Package-visible for direct unit tests. */
+    static String evidenceProblem(EvalRun r) {
         Map<String, Object> m = r.getMetrics();
-        return m != null && MANDATORY_METRICS.stream().allMatch(m::containsKey);
+        if (m == null) return "no metrics recorded";
+        for (String key : MANDATORY_METRICS) {
+            if (!m.containsKey(key) || m.get(key) == null)
+                return "mandatory metric '" + key + "' is missing or null";
+        }
+        for (String key : BOOLEAN_METRICS) {
+            if (!(m.get(key) instanceof Boolean))
+                return "metric '" + key + "' must be a boolean, got "
+                        + describe(m.get(key));
+        }
+        for (String key : NONNEGATIVE_NUMERIC_METRICS) {
+            Object v = m.get(key);
+            if (!(v instanceof Number n) || !Double.isFinite(n.doubleValue()))
+                return "metric '" + key + "' must be a finite number, got "
+                        + describe(v);
+            if (n.doubleValue() < 0)
+                return "metric '" + key + "' must be >= 0, got " + n;
+        }
+        if (!TERMINAL_STATUSES.contains(r.getStatus()))
+            return "run status '" + r.getStatus() + "' is not a recognized terminal status";
+        if (!Boolean.TRUE.equals(m.get("evidence_complete")))
+            return "evidence is not marked complete";
+        return null;
     }
 
-    /** Reject nonsensical threshold configurations fail-fast. */
-    private void validateThresholds(Map<String, Object> t) {
-        int minTrials = intVal(t, "min_trials_per_scenario", 3);
-        double minSuccess = doubleVal(t, "min_task_success_rate", 0.8);
-        double maxP95 = doubleVal(t, "max_p95_latency_ms", 30000);
-        double maxCost = doubleVal(t, "max_cost_per_run_usd", 0.50);
+    private static String describe(Object v) {
+        return v == null ? "null" : v.getClass().getSimpleName() + "(" + v + ")";
+    }
+
+    /** Reject nonsensical threshold configurations fail-fast. Thresholds
+     *  must be finite numbers of the right shape; wrong types and NaN fall
+     *  back to nothing — they are rejected. Package-visible for direct
+     *  unit tests. */
+    static void validateThresholds(Map<String, Object> t) {
+        int minTrials = intThreshold(t, "min_trials_per_scenario", 3);
+        int minBaselineTrials = intThreshold(t, "min_baseline_trials_per_scenario", 2);
+        double minSuccess = doubleThreshold(t, "min_task_success_rate", 0.8);
+        double maxP95 = doubleThreshold(t, "max_p95_latency_ms", 30000);
+        double maxCost = doubleThreshold(t, "max_cost_per_run_usd", 0.50);
         if (minTrials < 1)
             throw ApiException.badRequest("INVALID_THRESHOLD", "min_trials_per_scenario must be >= 1");
+        if (minBaselineTrials < 1)
+            throw ApiException.badRequest("INVALID_THRESHOLD", "min_baseline_trials_per_scenario must be >= 1");
         if (minSuccess < 0 || minSuccess > 1)
             throw ApiException.badRequest("INVALID_THRESHOLD", "min_task_success_rate must be between 0 and 1");
         if (maxP95 <= 0)
@@ -300,16 +334,20 @@ public class ReleaseDecisionService {
         if (maxCost < 0)
             throw ApiException.badRequest("INVALID_THRESHOLD", "max_cost_per_run_usd must be >= 0");
         Object rs = t.get("required_scenarios");
-        if (rs != null && !(rs instanceof List))
-            throw ApiException.badRequest("INVALID_THRESHOLD", "required_scenarios must be a list of scenario ids");
-        double maxReg = doubleVal(t, "max_baseline_regression", -1);
-        if (t.containsKey("max_baseline_regression") && (maxReg < 0 || maxReg > 1))
-            throw ApiException.badRequest("INVALID_THRESHOLD", "max_baseline_regression must be between 0 and 1");
-    }
-
-    private double doubleMetric(EvalRun r, String key) {
-        Object v = r.getMetrics().get(key);
-        return v instanceof Number n ? n.doubleValue() : 0;
+        if (rs != null) {
+            if (!(rs instanceof List<?> list))
+                throw ApiException.badRequest("INVALID_THRESHOLD", "required_scenarios must be a list of scenario ids");
+            for (Object s : list) {
+                if (!(s instanceof String))
+                    throw ApiException.badRequest("INVALID_THRESHOLD",
+                            "required_scenarios must contain only scenario id strings, got " + describe(s));
+            }
+        }
+        if (t.containsKey("max_baseline_regression")) {
+            double maxReg = doubleThreshold(t, "max_baseline_regression", -1);
+            if (maxReg < 0 || maxReg > 1)
+                throw ApiException.badRequest("INVALID_THRESHOLD", "max_baseline_regression must be between 0 and 1");
+        }
     }
 
     private String strMetric(EvalRun r, String key) {
@@ -317,14 +355,26 @@ public class ReleaseDecisionService {
         return v == null ? "" : String.valueOf(v);
     }
 
-    private int intVal(Map<String, Object> t, String key, int def) {
+    private static int intThreshold(Map<String, Object> t, String key, int def) {
         Object v = t.get(key);
-        return v instanceof Number n ? n.intValue() : def;
+        if (v == null) return def;
+        if (v instanceof Number n) {
+            double d = n.doubleValue();
+            if (Double.isFinite(d) && d == Math.floor(d)
+                    && d >= Integer.MIN_VALUE && d <= Integer.MAX_VALUE)
+                return (int) d;
+        }
+        throw ApiException.badRequest("INVALID_THRESHOLD",
+                key + " must be an integer, got " + describe(v));
     }
 
-    private double doubleVal(Map<String, Object> t, String key, double def) {
+    private static double doubleThreshold(Map<String, Object> t, String key, double def) {
         Object v = t.get(key);
-        return v instanceof Number n ? n.doubleValue() : def;
+        if (v == null) return def;
+        if (v instanceof Number n && Double.isFinite(n.doubleValue()))
+            return n.doubleValue();
+        throw ApiException.badRequest("INVALID_THRESHOLD",
+                key + " must be a finite number, got " + describe(v));
     }
 
     private double round(double v) { return Math.round(v * 1000.0) / 1000.0; }
