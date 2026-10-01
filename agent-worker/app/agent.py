@@ -81,12 +81,17 @@ class AgentRunner:
         if api_key:
             self.platform.api_key = api_key
 
+        version_name = version["name"]
+        scenario_id = scenario["id"]
+        task = scenario["task"]
+
         provider = self._provider
+        replay_tools = None
         if provider is None:
             if mode == "fixture":
                 provider = FixtureLLM(self._fixture_path)
             elif mode == "replay":
-                from .replay import ReplayLLM
+                from .replay import ReplayLLM, ReplayToolExecutor
                 if not self._recording_path:
                     raise ValueError(
                         "replay mode needs a recording: pass recording_path to "
@@ -94,12 +99,9 @@ class AgentRunner:
                 provider = ReplayLLM(self._recording_path, version=version,
                                      scenario_id=scenario_id,
                                      trial_index=trial_index)
+                replay_tools = ReplayToolExecutor(self._recording_path)
             else:
                 provider = LiveLLM(model=version.get("model_id") or None)
-
-        version_name = version["name"]
-        scenario_id = scenario["id"]
-        task = scenario["task"]
 
         # Create the eval run record first so the gateway can read chaos knobs.
         run = self.platform.eval_run_create(
@@ -136,17 +138,11 @@ class AgentRunner:
                             "has_final": resp.final_answer is not None,
                             "llm_retries": retries}, eval_run_id)
                 step_tool_executions: list[dict] = []
-                if resp.final_answer is not None and not resp.tool_calls:
-                    final_answer, citations = resp.final_answer, resp.citations
-                    break
-                if not resp.tool_calls and resp.final_answer is None:
-                    failure_reason = "empty_model_response"
-                    break
-                # Record the assistant turn. In live mode with native tool
-                # calling, keep the structured tool_calls so results can be
-                # fed back as proper `tool` messages; otherwise fall back to
-                # the text convention the fixture harness uses.
-                if mode == "live" and resp.provider == "live":
+                # In live mode with native tool calling, keep the structured
+                # tool_calls so results can be fed back as proper `tool`
+                # messages; otherwise fall back to the text convention the
+                # fixture harness uses.
+                if mode == "live" and resp.provider == "live" and resp.tool_calls:
                     messages.append({
                         "role": "assistant",
                         "content": None,
@@ -157,18 +153,23 @@ class AgentRunner:
                             for i, tc in enumerate(resp.tool_calls)
                         ],
                     })
+                # Execute tool calls. In replay mode, recorded results are
+                # played back — no platform calls, no business mutations.
                 for tc in resp.tool_calls:
                     tool, args = tc.get("name", ""), tc.get("arguments", {}) or {}
                     key = self._idempotency_key(eval_run_id, step, tool, args)
                     self._emit(trace_id, "tool_call", tool,
                                {"args": args, "idempotency_key": key}, eval_run_id)
-                    try:
-                        out = self.platform.tool_execute(
-                            tool=tool, args=args, idempotency_key=key,
-                            eval_run_id=eval_run_id, trace_id=trace_id)
-                    except Exception as e:
-                        out = {"status": "ERROR", "errorCode": "CLIENT_ERROR",
-                               "errorMessage": str(e)[:300], "result": {}}
+                    if replay_tools is not None:
+                        out = replay_tools.execute(step, tool, args)
+                    else:
+                        try:
+                            out = self.platform.tool_execute(
+                                tool=tool, args=args, idempotency_key=key,
+                                eval_run_id=eval_run_id, trace_id=trace_id)
+                        except Exception as e:
+                            out = {"status": "ERROR", "errorCode": "CLIENT_ERROR",
+                                   "errorMessage": str(e)[:300], "result": {}}
                     self.tool_call_count += 1
                     self._emit(trace_id, "tool_result", tool,
                                {"status": out.get("status"),
@@ -176,7 +177,8 @@ class AgentRunner:
                                 "error_code": out.get("errorCode") or "",
                                 "idempotent_replay": out.get("idempotentReplay", False)}, eval_run_id)
                     step_tool_executions.append({"tool": tool, "args": args,
-                                                 "status": out.get("status")})
+                                                 "status": out.get("status"),
+                                                 "result": out.get("result", {})})
                     if tool == "search_runbooks" and out.get("status") == "OK":
                         self.retrieved_hits.extend(out["result"].get("results", []))
                         if self._recorder is not None:
@@ -197,13 +199,22 @@ class AgentRunner:
                     if out.get("status") == "BUDGET_EXCEEDED":
                         failure_reason = "tool_budget_exceeded"
                         break
-                # Record the turn for replay (live mode only).
+                # Record every model response exactly once, before any
+                # terminal break — including final-answer-only turns.
                 if self._recorder is not None:
                     self._recorder.record_turn(step, resp, step_tool_executions)
                 if failure_reason:
                     break
-                if resp.final_answer is not None:
+                # Terminal: final answer with no tool calls. If the model
+                # returned tool calls alongside text, the tools above have
+                # executed and their results are in the conversation — keep
+                # looping for the model's next turn instead of treating the
+                # text as final.
+                if resp.final_answer is not None and not resp.tool_calls:
                     final_answer, citations = resp.final_answer, resp.citations
+                    break
+                if not resp.tool_calls and resp.final_answer is None:
+                    failure_reason = "empty_model_response"
                     break
             else:
                 failure_reason = failure_reason or "max_steps_exceeded"

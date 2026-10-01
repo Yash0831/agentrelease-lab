@@ -251,4 +251,29 @@ class ReleaseGateTest extends ServiceTestBase {
                 .isInstanceOf(ApiException.class)
                 .matches(e -> ((ApiException) e).getCode().equals("INVALID_THRESHOLD"));
     }
+
+    @Test
+    void insufficientBaselineEvidenceAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-base-" + UUID.randomUUID());
+        AgentVersion base = version("base-base-" + UUID.randomUUID());
+        UUID tenantId = TenantContext.get().tenantId();
+        // Regression rule enabled: baseline evidence is mandatory.
+        ReleasePolicy p = policies.save(new ReleasePolicy(tenantId, "pol-base-" + UUID.randomUUID(), Map.of(
+                "min_trials_per_scenario", 3,
+                "min_task_success_rate", 0.8,
+                "max_p95_latency_ms", 30000,
+                "max_cost_per_run_usd", 0.50,
+                "required_scenarios", List.of("s1"),
+                "max_baseline_regression", 0.1,
+                "min_baseline_trials_per_scenario", 2)));
+        // Candidate has full evidence; baseline has only 1 trial (needs 2).
+        trial(cand, "s1", 0, true, false, "batch-base");
+        trial(cand, "s1", 1, true, false, "batch-base");
+        trial(cand, "s1", 2, true, false, "batch-base");
+        trial(base, "s1", 0, true, false, "batch-base");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-base");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+        assertThat(String.valueOf(d.getEvidence().get("blockers"))).contains("baseline scenario 's1'");
+    }
 }

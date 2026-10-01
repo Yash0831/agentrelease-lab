@@ -1,9 +1,10 @@
 """Recorded-response replay for live evaluations.
 
-A live run can be recorded (model responses, tool calls, document versions,
-configuration) and later replayed without any LLM provider calls. Replay is
-deterministic: the recorded model decisions are returned in order, while tools
-are re-executed through the local gateway (no external side effects).
+A live run can be recorded (model responses, tool calls, tool results,
+document versions, configuration) and later replayed without any LLM provider
+calls and without touching business state. Replay is deterministic: the
+recorded model decisions are returned in order, and recorded tool results are
+played back from the recording — tools are NOT re-executed.
 
 Recording format (JSON, schema_version=1):
 {
@@ -18,31 +19,36 @@ Recording format (JSON, schema_version=1):
     {"step": 0,
      "response": {"tool_calls": [...], "content": "...",
                   "input_tokens": N, "output_tokens": M},
-     "tool_executions": [{"tool": ..., "args": {...}, "status": "..."}]},
+     "tool_executions": [{"tool": ..., "args": {...}, "status": "...",
+                          "result": {...sanitized...}}]},
   ],
   "retrieved_docs": [{"slug": ..., "version": N}],
   "final_answer": "...",
 }
 
 Sanitization: recordings contain the system prompt, task text, tool names/args,
-and tool result summaries. They do NOT contain API keys, Authorization headers,
-or provider credentials. Tool results are summarized (status + error codes),
-not full payloads, to avoid persisting sensitive data.
+and sanitized tool results. They do NOT contain API keys, Authorization
+headers, or provider credentials. Tool results are sanitized (sensitive keys
+removed) but complete enough to reproduce the original execution's
+decision-relevant data.
 
 What replay reproduces:
 - The exact sequence of model decisions (tool calls and final answers).
+- The exact tool results the original run observed.
 - Token usage and latency are NOT reproduced (replay is instant, zero cost).
 
 What replay does NOT reproduce:
 - Fresh model behavior (the model is not called).
-- Tool side effects are re-executed through the gateway (they are local, not
-  external). For a fully side-effect-free replay, use fixture mode.
+- Fresh tool execution (tools are not called; recorded results are returned).
+  Replay therefore causes no business mutations.
 
 Limits:
 - A recording is bound to (version fingerprint, scenario, trial). Replaying
   against a different version or scenario is rejected.
 - If the recording is truncated (fewer turns than the replay needs), replay
   fails with a clear error rather than hallucinating.
+- Recordings must contain tool results for every recorded tool call;
+  recordings without them are rejected as incomplete.
 """
 from __future__ import annotations
 
@@ -54,6 +60,20 @@ from .llm import LLMProvider, LLMResponse
 
 SCHEMA_VERSION = 1
 RECORDINGS_DIR = Path(__file__).resolve().parent.parent / "benchmarks" / "recordings"
+
+# Keys stripped from recorded tool results.
+_SENSITIVE_KEYS = {"api_key", "apikey", "authorization", "bearer", "token",
+                   "password", "secret", "credential"}
+
+
+def _sanitize_result(result):
+    """Remove sensitive keys from a tool result, preserving business data."""
+    if isinstance(result, dict):
+        return {k: _sanitize_result(v) for k, v in result.items()
+                if k.lower() not in _SENSITIVE_KEYS}
+    if isinstance(result, list):
+        return [_sanitize_result(v) for v in result]
+    return result
 
 
 class RecordingError(Exception):
@@ -77,7 +97,7 @@ class TurnRecorder:
 
     def record_turn(self, step: int, response: LLMResponse,
                     tool_executions: list[dict]) -> None:
-        # Sanitize: keep decision-relevant data, drop full payloads.
+        # Sanitize: keep decision-relevant data, drop credentials.
         self.turns.append({
             "step": step,
             "response": {
@@ -90,7 +110,8 @@ class TurnRecorder:
             },
             "tool_executions": [
                 {"tool": t.get("tool"), "args": t.get("args"),
-                 "status": t.get("status")}
+                 "status": t.get("status"),
+                 "result": _sanitize_result(t.get("result", {}))}
                 for t in tool_executions
             ],
         })
@@ -129,6 +150,54 @@ class TurnRecorder:
         }
         path.write_text(json.dumps(data, indent=2))
         return path
+
+
+class ReplayToolExecutor:
+    """Plays back recorded tool results. Makes NO platform calls.
+
+    The recording must contain a result for every recorded tool call;
+    otherwise replay is rejected as incomplete. Tool calls during replay
+    are matched by (step, tool, args) against the recording.
+    """
+
+    def __init__(self, recording_path: str | Path):
+        path = Path(recording_path)
+        if not path.exists():
+            raise RecordingError(f"recording not found: {path}")
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError as e:
+            raise RecordingError(f"recording is not valid JSON: {path} ({e})")
+        self.data = data
+        self._validate_complete(data)
+
+    def _validate_complete(self, data: dict) -> None:
+        if data.get("schema_version") != SCHEMA_VERSION:
+            raise RecordingError(
+                f"incompatible recording schema: got {data.get('schema_version')}, "
+                f"need {SCHEMA_VERSION}")
+        for turn in data.get("turns", []):
+            for te in turn.get("tool_executions", []):
+                if "result" not in te:
+                    raise RecordingError(
+                        f"recording incomplete: step {turn.get('step')} tool "
+                        f"{te.get('tool')} has no recorded result")
+
+    def execute(self, step: int, tool: str, args: dict) -> dict:
+        """Return the recorded result. No network, no mutations."""
+        turns = self.data.get("turns", [])
+        if step >= len(turns):
+            raise RecordingError(
+                f"recording truncated: replay needs step {step}, "
+                f"but recording has only {len(turns)} turns")
+        for te in turns[step].get("tool_executions", []):
+            if te.get("tool") == tool and te.get("args") == args:
+                return {"status": te.get("status"), "result": te.get("result", {}),
+                        "errorCode": te.get("error_code", ""),
+                        "idempotentReplay": True}
+        raise RecordingError(
+            f"recording has no matching tool execution: step {step} "
+            f"{tool} {args}")
 
 
 class ReplayLLM(LLMProvider):

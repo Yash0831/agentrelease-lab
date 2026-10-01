@@ -193,8 +193,30 @@ def approval_demo(ctx: Ctx) -> dict:
             "replay_status": out2["status"]}
 
 
-def trace_excerpt(ctx: Ctx, job: dict, version: str, scenario: str) -> list[dict]:
-    trial = next((t for t in job.get("trials", [])
+def _report_notes(mode: str) -> list[str]:
+    """Generate report notes from the actual execution mode."""
+    if mode == "fixture":
+        return [
+            "All runs labeled mode=fixture: deterministic harness behavior, not live AI.",
+            "Latency/cost numbers are real measurements of these local runs (fixture mode).",
+            "Fixture-mode verdicts measure harness behavior; they do not evaluate model quality.",
+        ]
+    if mode == "live":
+        return [
+            "All runs labeled mode=live: real provider calls with recorded responses.",
+            "Latency/cost numbers are real measurements of these runs against the live provider.",
+            "Recordings capture model decisions and sanitized tool results for replay.",
+        ]
+    if mode == "replay":
+        return [
+            "All runs labeled mode=replay: recorded model decisions and tool results played back.",
+            "No provider calls and no business mutations occurred during replay.",
+            "Replay reproduces a past execution; it does not evaluate fresh model behavior.",
+        ]
+    return [f"All runs labeled mode={mode}."]
+
+
+def trace_excerpt(ctx: Ctx, job: dict, version: str, scenario: str) -> list[dict]:    trial = next((t for t in job.get("trials", [])
                   if t["version"] == version and t["scenario"] == scenario), None)
     if not trial:
         return []
@@ -304,11 +326,7 @@ def main() -> int:
         "approval_demo": appr,
         "trace_evidence_excerpt": excerpt,
         "assertions": ctx.assertions,
-        "notes": [
-            "All runs labeled mode=fixture: deterministic harness behavior, not live AI.",
-            "Latency/cost numbers are real measurements of these local runs (fixture mode).",
-            "Replay (recorded-response) reproduces execution, not fresh model behavior.",
-        ],
+        "notes": _report_notes(mode),
     }
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)

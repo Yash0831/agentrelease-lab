@@ -138,6 +138,50 @@ public class ReleaseDecisionService {
             scenarioStats.put(scenario, stats);
         }
 
+        // Baseline evidence validation: when the regression rule is enabled,
+        // insufficient baseline evidence is INSUFFICIENT_EVIDENCE, not a skip.
+        // Baseline runs get the same mandatory-metric, finite-value, terminal-
+        // status, and evidence-completeness checks as candidate runs.
+        if (maxRegression >= 0) {
+            for (String scenario : requiredScenarios) {
+                List<EvalRun> baseTrials = baseByScenario
+                        .getOrDefault(scenario, List.of()).stream()
+                        .filter(r -> r.getMetrics() != null).toList();
+                if (baseTrials.size() < minBaselineTrials) {
+                    evidenceProblems.add("baseline scenario '" + scenario + "': "
+                            + baseTrials.size() + " finished trials, need >= "
+                            + minBaselineTrials);
+                    continue;
+                }
+                List<String> missing = baseTrials.stream()
+                        .filter(r -> !hasMandatoryMetrics(r))
+                        .map(r -> "trial " + r.getTrialIndex())
+                        .toList();
+                if (!missing.isEmpty()) {
+                    evidenceProblems.add("baseline scenario '" + scenario
+                            + "': missing mandatory metrics in "
+                            + String.join(", ", missing));
+                    continue;
+                }
+                List<EvalRun> incomplete = baseTrials.stream()
+                        .filter(r -> !boolMetric(r, "evidence_complete", true)).toList();
+                if (!incomplete.isEmpty()) {
+                    evidenceProblems.add("baseline scenario '" + scenario
+                            + "': incomplete evidence in "
+                            + incomplete.stream().map(r -> "trial " + r.getTrialIndex()).toList());
+                    continue;
+                }
+                List<EvalRun> nonTerminal = baseTrials.stream()
+                        .filter(r -> !"COMPLETED".equals(r.getStatus())
+                                && !"FAILED".equals(r.getStatus())).toList();
+                if (!nonTerminal.isEmpty()) {
+                    evidenceProblems.add("baseline scenario '" + scenario
+                            + "': non-terminal status in "
+                            + nonTerminal.stream().map(r -> "trial " + r.getTrialIndex()).toList());
+                }
+            }
+        }
+
         // Baseline comparison: informational rates plus the configurable
         // regression rule (relative, distinct from absolute thresholds).
         Map<String, Double> baselineSuccess = new LinkedHashMap<>();
@@ -171,13 +215,11 @@ public class ReleaseDecisionService {
                     absoluteFailures.add(e.getKey() + ": absolute p95 latency " + round(p95) + "ms > " + maxP95 + "ms");
                 if (cost > maxCost)
                     absoluteFailures.add(e.getKey() + ": absolute mean cost $" + round(cost) + " > $" + maxCost);
-                // Relative regression rule: only on comparable scenarios with
-                // sufficient baseline evidence.
+                // Relative regression rule: baseline evidence was validated
+                // above; if we reach here the baseline trials are sufficient.
                 if (maxRegression >= 0) {
-                    List<EvalRun> baseTrials = baseByScenario.getOrDefault(e.getKey(), List.of()).stream()
-                            .filter(r -> r.getMetrics() != null).toList();
                     Double baseRate = baselineSuccessUnrounded.get(e.getKey());
-                    if (baseTrials.size() >= minBaselineTrials && baseRate != null) {
+                    if (baseRate != null) {
                         double drop = baseRate - rate;
                         if (drop > maxRegression) {
                             relativeFailures.add(e.getKey() + ": relative regression vs baseline: success rate "

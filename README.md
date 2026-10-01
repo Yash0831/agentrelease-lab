@@ -100,7 +100,6 @@ platform/        Spring Boot 3.2 / Java 21 — API, auth, tenant isolation,
 agent-worker/    Python 3.12 / FastAPI — agent loop, LLM providers
                  (fixture + live), failure injection, metrics, Redis queue
 dashboard/       React 18 + TypeScript (Vite)
-db/              Flyway migrations (canonical: platform/src/main/resources/db/migration)
 eval/            datasets with provenance + expected outcomes, price table,
                  failure-injection scenario docs
 benchmarks/      run_eval.py driver + generated reports from actual runs

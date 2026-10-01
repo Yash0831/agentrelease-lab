@@ -99,11 +99,17 @@ implemented, tested, and committed.
 
 ## Tested (2026-09-30, sandbox)
 
-- Backend: `mvn -o test` — **39/39 green** (adds BatchIsolationTest, ConcurrencyTest, ReleaseGateHardeningTest, OutcomeProvingTest, and others).
-- Worker: `pytest` — **40/40 green** (adds test_replay.py, queue tests, LLM config tests).
+- Backend: `mvn -o test` — **39/39 green** (ReleaseGateTest 12 incl. batch
+  isolation, fail-closed policy, and baseline-evidence tests; ConcurrencyTest 4
+  incl. mutating-tool and approval-execution races; GatewayTest 8;
+  TenantIsolationTest 6; ApprovalWorkflowTest 5; FingerprintTest 4;
+  CorsPreflightTest 2; ApprovalRoundTripTest 1).
+- Worker: `pytest` — **40/40 green** (adds test_replay.py, test_agent_replay.py,
+  queue tests, LLM config tests).
 - Dashboard: `npm run build` clean; TypeScript check passes.
 - Benchmark (fixture mode, labeled): **6/6 assertions** — flawed → BLOCKED (3 critical policy failures), fixed → PASS, regressed → FAIL, approval executed once with replay rejected. Batch `bench-fixture-20260930-192057-5f1d6c`.
 - Docker Compose: **NOT verified** — no Docker daemon in this sandbox. Config reviewed (YAML parses, COPY sources exist, healthchecks wired).
+- Live provider: **NOT verified** — no `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` in this environment. Native tool calling is implemented and unit-tested only.
 
 ## Remaining
 
