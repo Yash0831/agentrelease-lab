@@ -3,9 +3,9 @@
 ## Problem
 
 Teams deploying AI agents that read internal documents and call business APIs
-need a defensible answer to: *"Can we safely release this new agent version,
-and what evidence supports that?"* AgentRelease Lab is a laboratory that
-produces that evidence: it runs baseline and candidate agent versions against
+need to answer: *"Can we safely release this new agent version, and what
+evidence supports that?"* AgentRelease Lab is a laboratory that produces that
+evidence: it runs baseline and candidate agent versions against
 the same scenarios, measures safety and quality outcomes, and renders a
 release decision with traceable evidence.
 
