@@ -172,7 +172,8 @@ public class ReleaseDecisionService {
                     continue;
                 }
                 List<EvalRun> nonTerminal = baseTrials.stream()
-                        .filter(r -> !"COMPLETED".equals(r.getStatus())
+                        .filter(r -> !"SUCCEEDED".equals(r.getStatus())
+                                && !"COMPLETED".equals(r.getStatus())
                                 && !"FAILED".equals(r.getStatus())).toList();
                 if (!nonTerminal.isEmpty()) {
                     evidenceProblems.add("baseline scenario '" + scenario

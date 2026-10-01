@@ -99,13 +99,14 @@ implemented, tested, and committed.
 
 ## Tested (2026-09-30, sandbox)
 
-- Backend: `mvn -o test` — **39/39 green** (ReleaseGateTest 12 incl. batch
+- Backend: `mvn -o test` — **42/42 green** (ReleaseGateTest 12 incl. batch
   isolation, fail-closed policy, and baseline-evidence tests; ConcurrencyTest 4
   incl. mutating-tool and approval-execution races; GatewayTest 8;
   TenantIsolationTest 6; ApprovalWorkflowTest 5; FingerprintTest 4;
   CorsPreflightTest 2; ApprovalRoundTripTest 1).
-- Worker: `pytest` — **40/40 green** (adds test_replay.py, test_agent_replay.py,
-  queue tests, LLM config tests).
+- Worker: `pytest` — **51/51 green** (adds test_agent_replay.py with 11 replay/
+  loop regression tests; test_replay.py; queue tests; LLM config tests).
+  0 skipped (Redis available).
 - Dashboard: `npm run build` clean; TypeScript check passes.
 - Benchmark (fixture mode, labeled): **6/6 assertions** — flawed → BLOCKED (3 critical policy failures), fixed → PASS, regressed → FAIL, approval executed once with replay rejected. Batch `bench-fixture-20260930-192057-5f1d6c`.
 - Docker Compose: **NOT verified** — no Docker daemon in this sandbox. Config reviewed (YAML parses, COPY sources exist, healthchecks wired).

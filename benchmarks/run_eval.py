@@ -216,7 +216,8 @@ def _report_notes(mode: str) -> list[str]:
     return [f"All runs labeled mode={mode}."]
 
 
-def trace_excerpt(ctx: Ctx, job: dict, version: str, scenario: str) -> list[dict]:    trial = next((t for t in job.get("trials", [])
+def trace_excerpt(ctx: Ctx, job: dict, version: str, scenario: str) -> list[dict]:
+    trial = next((t for t in job.get("trials", [])
                   if t["version"] == version and t["scenario"] == scenario), None)
     if not trial:
         return []
