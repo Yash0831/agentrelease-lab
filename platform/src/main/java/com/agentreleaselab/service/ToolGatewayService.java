@@ -103,6 +103,11 @@ public class ToolGatewayService {
     @Transactional
     public ToolOutcome execute(String toolName, Map<String, Object> args, String idempotencyKey,
                                UUID evalRunId, String traceId, ChaosConfig explicitChaos) {
+        return doExecute(toolName, args, idempotencyKey, evalRunId, traceId, explicitChaos);
+    }
+
+    private ToolOutcome doExecute(String toolName, Map<String, Object> args, String idempotencyKey,
+                                  UUID evalRunId, String traceId, ChaosConfig explicitChaos) {
         TenantContext ctx = TenantContext.get();
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw ApiException.badRequest("IDEMPOTENCY_KEY_REQUIRED",
@@ -115,9 +120,17 @@ public class ToolGatewayService {
                 ? explicitChaos : loadChaos(evalRunId);
 
         // 1. Idempotency: a repeated key returns the ORIGINAL result without re-executing.
+        // If the key is reused with a DIFFERENT tool or arguments, return a
+        // stable conflict (not the unrelated result, and never re-execute).
         Optional<ToolCall> existing = toolCalls.findByTenantIdAndIdempotencyKey(ctx.tenantId(), idempotencyKey);
         if (existing.isPresent()) {
             ToolCall prev = existing.get();
+            if (!prev.getToolName().equals(toolName) || !argsEqual(prev.getArgs(), safeArgs)) {
+                return persist(ctx, evalRunId, toolName, safeArgs, idempotencyKey + ":conflict:" + UUID.randomUUID(),
+                        "CONFLICT", null, "IDEMPOTENCY_KEY_CONFLICT",
+                        "Idempotency key '" + idempotencyKey + "' was already used for "
+                                + prev.getToolName() + " with different arguments", null, traceId);
+            }
             Map<String, Object> r = new LinkedHashMap<>(prev.getResult() == null ? Map.of() : prev.getResult());
             r.put("idempotent_replay", true);
             return new ToolOutcome(prev.getStatus(), r, null, null, prev.getApprovalId(), true);
@@ -216,6 +229,18 @@ public class ToolGatewayService {
             return persist(ctx, evalRunId, toolName, safeArgs, idempotencyKey,
                     "ERROR", null, "TOOL_ERROR", "Tool execution failed: " + cause.getMessage(), null, traceId);
         }
+    }
+
+    /** Args equality for idempotency-conflict detection: same keys and values. */
+    private boolean argsEqual(Map<String, Object> a, Map<String, Object> b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.size() != b.size()) return false;
+        for (var e : a.entrySet()) {
+            Object bv = b.get(e.getKey());
+            if (bv == null ? e.getValue() != null : !bv.equals(e.getValue())) return false;
+        }
+        return true;
     }
 
     private ChaosConfig loadChaos(UUID evalRunId) {
@@ -364,18 +389,11 @@ public class ToolGatewayService {
         call.setApprovalId(approvalId);
         call.setFinishedAt(Instant.now());
         call.setDurationMs(durationMs);
-        try {
-            toolCalls.save(call);
-        } catch (DataIntegrityViolationException race) {
-            // Lost a race on the idempotency key: return the winner's result.
-            return toolCalls.findByTenantIdAndIdempotencyKey(ctx.tenantId(), idempotencyKey)
-                    .map(prev -> {
-                        Map<String, Object> r = new LinkedHashMap<>(prev.getResult() == null ? Map.of() : prev.getResult());
-                        r.put("idempotent_replay", true);
-                        return new ToolOutcome(prev.getStatus(), r, null, null, prev.getApprovalId(), true);
-                    })
-                    .orElseThrow(() -> race);
-        }
+        // Unique constraint on (tenant_id, idempotency_key) is the arbiter
+        // for concurrent races: a DataIntegrityViolationException here means
+        // another transaction won, and execute() converts it to the winner's
+        // replay via lookupWinner().
+        toolCalls.save(call);
         if (traceId != null) {
             traces.record(evalRunId, traceId, UUID.randomUUID().toString().replace("-", "").substring(0, 16),
                     null, "tool_call", toolName,

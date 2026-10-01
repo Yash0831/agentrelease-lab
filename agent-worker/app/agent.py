@@ -39,9 +39,12 @@ Rules:
 
 class AgentRunner:
     def __init__(self, platform: PlatformClient, provider=None,
-                 fixture_path: str | None = None):
+                 fixture_path: str | None = None,
+                 recorder=None, recording_path: str | None = None):
         self.platform = platform
         self._provider = provider
+        self._recorder = recorder
+        self._recording_path = recording_path
         if fixture_path is None:
             candidate = Path("fixtures/fixture_responses.yaml")
             if not candidate.exists():
@@ -80,8 +83,19 @@ class AgentRunner:
 
         provider = self._provider
         if provider is None:
-            provider = FixtureLLM(self._fixture_path) if mode == "fixture" else LiveLLM(
-                model=version.get("model_id") or None)
+            if mode == "fixture":
+                provider = FixtureLLM(self._fixture_path)
+            elif mode == "replay":
+                from .replay import ReplayLLM
+                if not self._recording_path:
+                    raise ValueError(
+                        "replay mode needs a recording: pass recording_path to "
+                        "AgentRunner or run with --mode fixture/--mode live")
+                provider = ReplayLLM(self._recording_path, version=version,
+                                     scenario_id=scenario_id,
+                                     trial_index=trial_index)
+            else:
+                provider = LiveLLM(model=version.get("model_id") or None)
 
         version_name = version["name"]
         scenario_id = scenario["id"]
@@ -121,6 +135,7 @@ class AgentRunner:
                             "tool_calls": len(resp.tool_calls),
                             "has_final": resp.final_answer is not None,
                             "llm_retries": retries}, eval_run_id)
+                step_tool_executions: list[dict] = []
                 if resp.final_answer is not None and not resp.tool_calls:
                     final_answer, citations = resp.final_answer, resp.citations
                     break
@@ -160,8 +175,12 @@ class AgentRunner:
                                 "args": args,
                                 "error_code": out.get("errorCode") or "",
                                 "idempotent_replay": out.get("idempotentReplay", False)}, eval_run_id)
+                    step_tool_executions.append({"tool": tool, "args": args,
+                                                 "status": out.get("status")})
                     if tool == "search_runbooks" and out.get("status") == "OK":
                         self.retrieved_hits.extend(out["result"].get("results", []))
+                        if self._recorder is not None:
+                            self._recorder.record_retrieved(out["result"].get("results", []))
                     if mode == "live" and resp.provider == "live":
                         messages.append({
                             "role": "tool",
@@ -178,6 +197,9 @@ class AgentRunner:
                     if out.get("status") == "BUDGET_EXCEEDED":
                         failure_reason = "tool_budget_exceeded"
                         break
+                # Record the turn for replay (live mode only).
+                if self._recorder is not None:
+                    self._recorder.record_turn(step, resp, step_tool_executions)
                 if failure_reason:
                     break
                 if resp.final_answer is not None:
@@ -200,6 +222,15 @@ class AgentRunner:
         except Exception:
             pass  # trace shipping must not fail the run; events are also returned
 
+        # Persist the recording for replay (live mode only).
+        recording_path = None
+        if self._recorder is not None:
+            self._recorder.final_answer = final_answer
+            try:
+                recording_path = str(self._recorder.save())
+            except Exception:
+                pass  # recording must not fail the run
+
         return {
             "eval_run_id": eval_run_id,
             "trace_id": trace_id,
@@ -211,6 +242,7 @@ class AgentRunner:
             "final_answer": final_answer,
             "citations": citations,
             "failure_reason": failure_reason,
+            "recording_path": recording_path,
             "latency_ms": latency_ms,
             "tool_call_count": self.tool_call_count,
             "llm_retries": self.llm_retries,

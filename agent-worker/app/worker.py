@@ -22,7 +22,8 @@ from .platform_client import PlatformClient
 from .tracing import tracer
 
 
-def run_job(payload: dict) -> dict:
+def run_job(payload: dict, *, jid: str | None = None,
+            redis_client=None) -> dict:
     versions = payload["versions"]
     dataset_id = payload.get("dataset_id", "it-service-desk-v1")
     trials = int(payload.get("trials", 3))
@@ -67,6 +68,18 @@ def run_job(payload: dict) -> dict:
                 chaos = dict(scenario.get("chaos", {}) or {})
                 chaos.update(chaos_overrides.get(scenario["id"], {}))
                 for trial in range(trials):
+                    # Resumable: skip trials that already completed before a
+                    # crash/retry, so retries never duplicate side effects.
+                    if jid and redis_client is not None and q.is_trial_done(
+                            jid, redis_client, vname, scenario["id"], trial):
+                        summary.append({
+                            "version": vname, "scenario": scenario["id"],
+                            "trial": trial, "eval_run_id": "",
+                            "batch_id": batch_id, "status": "SKIPPED",
+                            "task_completed": True, "critical": False,
+                            "resumed": True,
+                        })
+                        continue
                     runner = AgentRunner(platform)
                     with tr.start_as_current_span(
                             "trial", attributes={"version": vname,
@@ -78,6 +91,23 @@ def run_job(payload: dict) -> dict:
                             platform.reset_fixtures()
                         except Exception as e:
                             print(f"fixture reset failed: {e}", flush=True)
+                        # Live mode: record model responses for replay.
+                        # Replay mode: load the recording (no live calls).
+                        recorder = None
+                        recording_path = payload.get("recording_path")
+                        if mode == "live":
+                            from .replay import TurnRecorder
+                            recorder = TurnRecorder(
+                                version=version, scenario_id=scenario["id"],
+                                trial_index=trial, batch_id=batch_id,
+                                model_id=version.get("model_id", ""))
+                            runner = AgentRunner(platform, recorder=recorder)
+                        elif mode == "replay":
+                            if not recording_path:
+                                raise ValueError(
+                                    "replay mode needs recording_path in the job payload")
+                            runner = AgentRunner(platform,
+                                                 recording_path=recording_path)
                         result = runner.run(
                             version=version, scenario=scenario,
                             trial_index=trial, mode=mode, chaos=dict(chaos),
@@ -117,6 +147,11 @@ def run_job(payload: dict) -> dict:
                             "task_completed": metrics["task_completed"],
                             "critical": metrics["critical_policy_failure"],
                         })
+                        # Mark done for crash-resume; heartbeat the lease.
+                        if jid and redis_client is not None:
+                            q.mark_trial_done(jid, redis_client, vname,
+                                              scenario["id"], trial)
+                            q.heartbeat(jid, redis_client)
     return {"status": "ok", "mode": mode, "batch_id": batch_id, "trials": summary}
 
 
@@ -137,7 +172,7 @@ def auto_approve(platform: PlatformClient, eval_run_id: str) -> int:
 
 
 def consume_forever() -> None:
-    """Redis consumer with bounded retries and idempotent completion."""
+    """Redis consumer with atomic dedup, crash recovery, and resumable trials."""
     print("arl worker consumer started", flush=True)
     while True:
         item = q.dequeue(block_s=5)
@@ -145,10 +180,11 @@ def consume_forever() -> None:
             continue
         jid, payload, c = item
         if q.get_result(jid) is not None:
+            q.complete(jid, q.get_result(jid), c)
             continue  # idempotent: already finished
         attempts = q.record_attempt(jid, c)
         try:
-            result = run_job(payload)
+            result = run_job(payload, jid=jid, redis_client=c)
             q.complete(jid, {"status": "ok", **result}, c)
         except Exception as e:
             outcome = q.requeue_or_dead(jid, c, attempts)
