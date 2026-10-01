@@ -76,10 +76,11 @@ Execute failure codes: `APPROVAL_NOT_APPROVED`, `APPROVAL_TAMPERED`
 | POST | /api/agent-versions | Register; fingerprint computed server-side |
 | GET | /api/agent-versions | List (id, name, modelId, fingerprint, …) |
 | GET | /api/agent-versions/{id} | Full version incl. prompt |
-| POST | /api/eval-runs | Create run `{agentVersionId, datasetId, scenarioId, trialIndex, mode, chaos}` |
+| POST | /api/eval-runs | Create run `{agentVersionId, datasetId, scenarioId, trialIndex, mode, chaos, batchId}` |
 | PATCH | /api/eval-runs/{id} | Finish `{status, metrics, error}` |
 | GET | /api/eval-runs?agentVersionId= | List runs for a version |
 | GET | /api/eval-runs/{id} | One run with metrics |
+| POST | /api/eval-runs/fixtures/reset | Reset mutable fixtures (tickets, approvals, grants, service status) for the caller's tenant; isolates trials |
 | POST | /api/traces/events | Batch ingest `{evalRunId, events[]}` (payloads sanitized) |
 | GET | /api/traces/timeline?evalRunId= | Chronological trace events |
 | GET | /api/datasets | Dataset summaries with provenance |

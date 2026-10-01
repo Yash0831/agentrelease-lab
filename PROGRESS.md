@@ -81,14 +81,37 @@ Updated as increments land. Dates are 2026-09-29 unless noted.
 - Benchmark re-runs collided on the eval-run uniqueness key — clean single-process
   runs only; a batch/run identifier is still needed for repeatability.
 
+## Audit increments (2026-09-30)
+
+Full implement-and-verify audit of the eight workstreams. All items below are
+implemented, tested, and committed.
+
+| # | Increment | Status | Verified how |
+|---|-----------|--------|--------------|
+| A1 | Live AI path: native tool calling | DONE | Provider-native OpenAI `tools` with JSON Schemas for all six tools; assistant `tool_calls` parsed with call IDs; proper `role=tool` messages; `LLM_MODEL` from config (not hardcoded); `validate_live_config()`; native tool-call/config unit tests. **Live provider never executed here** — no `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` configured in this environment. |
+| A2 | Outcome-proving evaluations | DONE | `FixtureResetService` + `POST /api/eval-runs/fixtures/reset` resets mutable fixtures (tickets, approvals, grants, service status) between trials; cross-tenant checker requires an actual `GLBX-*` access attempt and verifies denial; duplicate-write probe verifies persisted ToolCall state; separate `citations_valid`/`citations_supported`; `evidence_complete` with gap reporting; regression tests for no-attempt, denied, leaked, unsupported citations, evaluator failures. |
+| A3 | Fail-closed release gate | DONE | Rejects empty required-scenario policies; validates thresholds; missing metrics/incomplete evidence → `INSUFFICIENT_EVIDENCE`; scans critical failures across all candidate runs in batch (including non-required scenarios); unrounded comparisons with rounded display; configurable baseline-regression rule with absolute/relative failure lists. Tests for empty policy, invalid thresholds, optional-scenario criticals, incomplete evidence, baseline regression. |
+| A4 | Repeatable evaluation batches | DONE | `batch_id` on eval runs and release decisions (V5 migration); batch-scoped uniqueness; release evaluation requires `batchId`; worker/benchmark generate and propagate batch IDs; dashboard compare/decision pages show batch IDs. Batch-isolation/repeatability tests. **Runtime fix**: `JobRequest` now carries `batch_id` through `/jobs/run-sync` (Pydantic was dropping it, minting a fresh batch per job). |
+| A5 | Docker packaging/readiness | DONE | Platform + worker Dockerfiles use repo-root context; datasets and price table copied in; `EVAL_DATASETS_DIR`/`ARL_PRICE_TABLE` set; curl installed; `/api/health` and `/health` healthchecks; compose uses build args for `VITE_PLATFORM_URL`; worker/dashboard wait for healthy platform. **Runtime NOT verified here** — no Docker daemon in this sandbox. |
+| A6 | Recorded-response replay | DONE | `TurnRecorder` writes JSON recordings bound to version fingerprint/scenario/trial; `ReplayLLM` reads without provider networking; rejects missing/invalid/incompatible/truncated recordings; networking-disabled tests verify no HTTP provider call. Tests: `agent-worker/tests/test_replay.py`. |
+| A7 | Idempotency + job hardening | DONE | Same idempotency key + different tool/args → auditable `CONFLICT` with `IDEMPOTENCY_KEY_CONFLICT` (V6 migration); `ConcurrencyTest.java`; atomic Lua enqueue dedup; processing leases; abandoned-job recovery; heartbeats; per-trial completion records; worker skips completed trials. Queue tests for atomic enqueue, abandoned recovery, trial completion. |
+| A8 | Runtime fixes (benchmark) | DONE | `JobRequest.batch_id` propagation (see A4); `FixtureResetService` breaks `tool_calls → approvals` FK before deleting approvals; approval demo creates its own request when no pending approval survives fixture resets. **Benchmark 6/6**: flawed → BLOCKED, fixed → PASS, regressed → FAIL, approval exactly-once. Report: `benchmarks/reports/eval-report-fixture-20260930-192332.json`. |
+
+## Tested (2026-09-30, sandbox)
+
+- Backend: `mvn -o test` — **39/39 green** (adds BatchIsolationTest, ConcurrencyTest, ReleaseGateHardeningTest, OutcomeProvingTest, and others).
+- Worker: `pytest` — **40/40 green** (adds test_replay.py, queue tests, LLM config tests).
+- Dashboard: `npm run build` clean; TypeScript check passes.
+- Benchmark (fixture mode, labeled): **6/6 assertions** — flawed → BLOCKED (3 critical policy failures), fixed → PASS, regressed → FAIL, approval executed once with replay rejected. Batch `bench-fixture-20260930-192057-5f1d6c`.
+- Docker Compose: **NOT verified** — no Docker daemon in this sandbox. Config reviewed (YAML parses, COPY sources exist, healthchecks wired).
+
 ## Remaining
 
-- Docker/Compose: untested (platform dataset path, worker price-table path,
-  dashboard Vite build args, root `db/` deliverable).
-- True concurrency test for approval execution (row lock is wired, race test missing).
-- Idempotency-key mismatch conflict (same key + different args → stable conflict).
-- Live-LLM path: wired but never exercised against a real model (also needs the
-  ```tool_call convention added to the agent system prompt — see agent-worker/app/agent.py).
+- Live-LLM path: native tool calling implemented and unit-tested, but never exercised
+  against a real model here (no `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` in this environment).
+- Docker Compose runtime: config fixed but not executed (no Docker daemon here).
+- True concurrency test for approval execution (row lock is wired, race test still missing).
+- Concurrent mutating-tool idempotency race (current test uses a read-only tool).
 
 ## Known gaps / honest limitations
 
