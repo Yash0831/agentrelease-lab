@@ -9,6 +9,7 @@ import com.agentreleaselab.domain.ReleasePolicy;
 import com.agentreleaselab.service.EvalRunService;
 import com.agentreleaselab.service.FingerprintService;
 import com.agentreleaselab.service.ReleaseDecisionService;
+import com.agentreleaselab.service.ApiException;
 import com.agentreleaselab.security.TenantContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +21,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ADR-0007: critical failures block; sparse evidence abstains; thresholds decide. */
 @Transactional
@@ -56,12 +58,17 @@ class ReleaseGateTest extends ServiceTestBase {
         m.put("latency_ms", latencyMs);
         m.put("estimated_cost_usd", 0.001);
         m.put("unauthorized_executed", critical ? 1 : 0);
+        m.put("evidence_complete", true);
         m.put("mode", "fixture");
         return m;
     }
 
     private void trial(AgentVersion v, String scenario, int idx, boolean completed, boolean critical) {
-        EvalRun r = runs.create(v.getId(), "ds-test", scenario, idx, "fixture", Map.of());
+        trial(v, scenario, idx, completed, critical, "batch-gate-test");
+    }
+
+    private void trial(AgentVersion v, String scenario, int idx, boolean completed, boolean critical, String batchId) {
+        EvalRun r = runs.create(v.getId(), "ds-test", scenario, idx, "fixture", Map.of(), batchId);
         runs.finish(r.getId(), "SUCCEEDED", metrics(completed, critical, 1200), null);
     }
 
@@ -73,7 +80,7 @@ class ReleaseGateTest extends ServiceTestBase {
         ReleasePolicy p = policy("pol-blocked-" + UUID.randomUUID(), 2, List.of("s1"));
         trial(cand, "s1", 0, true, false);
         trial(cand, "s1", 1, true, true); // critical breach on one trial
-        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-gate-test");
         assertThat(d.getVerdict()).isEqualTo("BLOCKED");
         assertThat(String.valueOf(d.getEvidence().get("blockers"))).containsIgnoringCase("critical");
     }
@@ -85,7 +92,7 @@ class ReleaseGateTest extends ServiceTestBase {
         AgentVersion base = version("base-" + UUID.randomUUID());
         ReleasePolicy p = policy("pol-sparse-" + UUID.randomUUID(), 3, List.of("s1"));
         trial(cand, "s1", 0, true, false); // only 1 of 3 required trials
-        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-gate-test");
         assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
     }
 
@@ -99,7 +106,7 @@ class ReleaseGateTest extends ServiceTestBase {
         trial(cand, "s1", 1, true, false);
         trial(base, "s1", 0, true, false);
         trial(base, "s1", 1, true, false);
-        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-gate-test");
         assertThat(d.getVerdict()).isEqualTo("PASS");
         assertThat(d.getEvidence()).containsKey("scenario_stats");
     }
@@ -112,7 +119,136 @@ class ReleaseGateTest extends ServiceTestBase {
         ReleasePolicy p = policy("pol-fail-" + UUID.randomUUID(), 2, List.of("s1"));
         trial(cand, "s1", 0, true, false);
         trial(cand, "s1", 1, false, false); // 50% < 80% threshold
-        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-gate-test");
         assertThat(d.getVerdict()).isEqualTo("FAIL");
+    }
+
+    @Test
+    void batchesAreIsolatedAndRepeatable() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-batch-" + UUID.randomUUID());
+        AgentVersion base = version("cand-base-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-batch-" + UUID.randomUUID(), 2, List.of("s1"));
+        // Same (version, dataset, scenario, trial, mode) in two batches: no
+        // uniqueness collision, and each batch is independently inspectable.
+        trial(cand, "s1", 0, true, false, "batch-A");
+        trial(cand, "s1", 1, true, false, "batch-A");
+        trial(base, "s1", 0, true, false, "batch-A");
+        trial(base, "s1", 1, true, false, "batch-A");
+        trial(cand, "s1", 0, false, false, "batch-B");
+        trial(cand, "s1", 1, false, false, "batch-B");
+        trial(base, "s1", 0, true, false, "batch-B");
+        trial(base, "s1", 1, true, false, "batch-B");
+        ReleaseDecision dA = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-A");
+        ReleaseDecision dB = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-B");
+        assertThat(dA.getVerdict()).isEqualTo("PASS");
+        assertThat(dB.getVerdict()).isEqualTo("FAIL");
+        assertThat(dA.getBatchId()).isEqualTo("batch-A");
+        assertThat(dB.getBatchId()).isEqualTo("batch-B");
+        assertThat(dA.getEvidence().get("batch_id")).isEqualTo("batch-A");
+    }
+
+    @Test
+    void evaluateRejectsMissingBatchId() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-nobatch-" + UUID.randomUUID());
+        AgentVersion base = version("cand-nobase-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-nobatch-" + UUID.randomUUID(), 2, List.of("s1"));
+        assertThatThrownBy(() -> gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", null))
+                .isInstanceOf(ApiException.class)
+                .matches(e -> ((ApiException) e).getCode().equals("BATCH_ID_REQUIRED"));
+        assertThatThrownBy(() -> gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "  "))
+                .isInstanceOf(ApiException.class)
+                .matches(e -> ((ApiException) e).getCode().equals("BATCH_ID_REQUIRED"));
+    }
+
+    @Test
+    void emptyRequiredScenariosRejected() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-empty-" + UUID.randomUUID());
+        AgentVersion base = version("base-empty-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-empty-" + UUID.randomUUID(), 2, List.of());
+        assertThatThrownBy(() -> gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-empty"))
+                .isInstanceOf(ApiException.class)
+                .matches(e -> ((ApiException) e).getCode().equals("EMPTY_REQUIRED_SCENARIOS"));
+    }
+
+    @Test
+    void criticalFailureOutsideRequiredScenariosStillBlocks() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-outside-" + UUID.randomUUID());
+        AgentVersion base = version("base-outside-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-outside-" + UUID.randomUUID(), 2, List.of("s1"));
+        trial(cand, "s1", 0, true, false, "batch-outside");
+        trial(cand, "s1", 1, true, false, "batch-outside");
+        // Critical failure in an OPTIONAL scenario (not in required_scenarios).
+        trial(cand, "s-optional", 0, true, true, "batch-outside");
+        trial(base, "s1", 0, true, false, "batch-outside");
+        trial(base, "s1", 1, true, false, "batch-outside");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-outside");
+        assertThat(d.getVerdict()).isEqualTo("BLOCKED");
+        assertThat(String.valueOf(d.getEvidence().get("critical_failures"))).contains("s-optional");
+    }
+
+    @Test
+    void incompleteEvidenceAbstains() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-inc-" + UUID.randomUUID());
+        AgentVersion base = version("base-inc-" + UUID.randomUUID());
+        ReleasePolicy p = policy("pol-inc-" + UUID.randomUUID(), 2, List.of("s1"));
+        EvalRun r1 = runs.create(cand.getId(), "ds-test", "s1", 0, "fixture", Map.of(), "batch-inc");
+        Map<String, Object> incomplete = metrics(true, false, 1200);
+        incomplete.put("evidence_complete", false);
+        runs.finish(r1.getId(), "SUCCEEDED", incomplete, null);
+        EvalRun r2 = runs.create(cand.getId(), "ds-test", "s1", 1, "fixture", Map.of(), "batch-inc");
+        runs.finish(r2.getId(), "SUCCEEDED", metrics(true, false, 1200), null);
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-inc");
+        assertThat(d.getVerdict()).isEqualTo("INSUFFICIENT_EVIDENCE");
+    }
+
+    @Test
+    void baselineRegressionRuleBlocksRelativeDrop() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-reg-" + UUID.randomUUID());
+        AgentVersion base = version("base-reg-" + UUID.randomUUID());
+        UUID tenantId = TenantContext.get().tenantId();
+        // Candidate passes absolute thresholds (75% < 80%? no — use 100% vs baseline 100%,
+        // but with a regression: candidate 2/3 = 66.7%, baseline 3/3 = 100%).
+        // Absolute threshold 0.6 passes for candidate, but regression 0.333 > 0.2 blocks.
+        ReleasePolicy p = policies.save(new ReleasePolicy(tenantId, "pol-reg-" + UUID.randomUUID(), Map.of(
+                "min_trials_per_scenario", 3,
+                "min_task_success_rate", 0.6,
+                "max_p95_latency_ms", 30000,
+                "max_cost_per_run_usd", 0.50,
+                "required_scenarios", List.of("s1"),
+                "max_baseline_regression", 0.2,
+                "min_baseline_trials_per_scenario", 2)));
+        trial(cand, "s1", 0, true, false, "batch-reg");
+        trial(cand, "s1", 1, true, false, "batch-reg");
+        trial(cand, "s1", 2, false, false, "batch-reg");
+        trial(base, "s1", 0, true, false, "batch-reg");
+        trial(base, "s1", 1, true, false, "batch-reg");
+        trial(base, "s1", 2, true, false, "batch-reg");
+        ReleaseDecision d = gate.evaluate(cand.getId(), base.getId(), p.getId(), "ds-test", "fixture", "batch-reg");
+        assertThat(d.getVerdict()).isEqualTo("FAIL");
+        assertThat(String.valueOf(d.getEvidence().get("relative_failures"))).contains("relative regression");
+        assertThat(String.valueOf(d.getEvidence().get("absolute_failures"))).doesNotContain("s1");
+    }
+
+    @Test
+    void invalidThresholdsRejected() {
+        asUser(ACME_AGENT);
+        AgentVersion cand = version("cand-inv-" + UUID.randomUUID());
+        AgentVersion base = version("base-inv-" + UUID.randomUUID());
+        UUID tenantId = TenantContext.get().tenantId();
+        ReleasePolicy bad = policies.save(new ReleasePolicy(tenantId, "pol-inv-" + UUID.randomUUID(), Map.of(
+                "min_trials_per_scenario", 2,
+                "min_task_success_rate", 1.5,
+                "max_p95_latency_ms", 30000,
+                "max_cost_per_run_usd", 0.50,
+                "required_scenarios", List.of("s1"))));
+        assertThatThrownBy(() -> gate.evaluate(cand.getId(), base.getId(), bad.getId(), "ds-test", "fixture", "batch-inv"))
+                .isInstanceOf(ApiException.class)
+                .matches(e -> ((ApiException) e).getCode().equals("INVALID_THRESHOLD"));
     }
 }

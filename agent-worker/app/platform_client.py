@@ -41,6 +41,10 @@ class PlatformClient:
             "evalRunId": eval_run_id, "traceId": trace_id})
         return r.json()
 
+    def tool_call_by_key(self, idempotency_key: str) -> dict:
+        return self._req("GET", "/api/tools/calls",
+                         params={"idempotencyKey": idempotency_key}).json()
+
     # ---- eval runs ----
     def eval_run_create(self, **kwargs) -> dict:
         return self._req("POST", "/api/eval-runs", json=kwargs).json()
@@ -53,6 +57,9 @@ class PlatformClient:
 
     def get_eval_run(self, run_id: str) -> dict:
         return self._req("GET", f"/api/eval-runs/{run_id}").json()
+
+    def reset_fixtures(self) -> dict:
+        return self._req("POST", "/api/eval-runs/fixtures/reset", json={}).json()
 
     # ---- traces ----
     def trace_events(self, eval_run_id: str, events: list[dict]) -> dict:

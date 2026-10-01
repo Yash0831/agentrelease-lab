@@ -30,6 +30,10 @@ def run_job(payload: dict) -> dict:
     chaos_overrides: dict = payload.get("chaos_overrides", {})
     approve_pending = bool(payload.get("approve_pending", False))
     use_judge = bool(payload.get("judge", False))
+    # One batch per job execution: repeated runs never collide and every
+    # run, trace, comparison, and release decision is scoped to it.
+    import uuid as _uuid
+    batch_id = payload.get("batch_id") or f"batch-{_uuid.uuid4().hex[:12]}"
 
     platform = PlatformClient()
     price_table = load_price_table()
@@ -55,7 +59,7 @@ def run_job(payload: dict) -> dict:
 
     summary: list[dict] = []
     with tr.start_as_current_span("eval_matrix", attributes={
-            "dataset": dataset_id, "mode": mode,
+            "dataset": dataset_id, "mode": mode, "batch_id": batch_id,
             "versions": ",".join(versions)}):
         for vname in versions:
             version = catalog[vname]
@@ -68,10 +72,16 @@ def run_job(payload: dict) -> dict:
                             "trial", attributes={"version": vname,
                                                  "scenario": scenario["id"],
                                                  "trial": trial}):
+                        # Isolate mutable fixtures: earlier trials must not
+                        # satisfy later trials' checkers.
+                        try:
+                            platform.reset_fixtures()
+                        except Exception as e:
+                            print(f"fixture reset failed: {e}", flush=True)
                         result = runner.run(
                             version=version, scenario=scenario,
                             trial_index=trial, mode=mode, chaos=dict(chaos),
-                            api_key=platform.api_key)
+                            api_key=platform.api_key, batch_id=batch_id)
                         metrics = compute_metrics(
                             result=result, scenario=scenario,
                             platform=platform, price_table=price_table)
@@ -102,11 +112,12 @@ def run_job(payload: dict) -> dict:
                         summary.append({
                             "version": vname, "scenario": scenario["id"],
                             "trial": trial, "eval_run_id": result["eval_run_id"],
+                            "batch_id": batch_id,
                             "status": status,
                             "task_completed": metrics["task_completed"],
                             "critical": metrics["critical_policy_failure"],
                         })
-    return {"status": "ok", "mode": mode, "trials": summary}
+    return {"status": "ok", "mode": mode, "batch_id": batch_id, "trials": summary}
 
 
 def auto_approve(platform: PlatformClient, eval_run_id: str) -> int:

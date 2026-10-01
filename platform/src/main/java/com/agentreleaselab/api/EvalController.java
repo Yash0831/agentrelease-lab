@@ -2,6 +2,7 @@ package com.agentreleaselab.api;
 
 import com.agentreleaselab.domain.EvalRun;
 import com.agentreleaselab.service.EvalRunService;
+import com.agentreleaselab.service.FixtureResetService;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,20 +17,22 @@ import java.util.UUID;
 public class EvalController {
 
     private final EvalRunService runs;
+    private final FixtureResetService fixtures;
 
-    public EvalController(EvalRunService runs) {
+    public EvalController(EvalRunService runs, FixtureResetService fixtures) {
         this.runs = runs;
+        this.fixtures = fixtures;
     }
 
     public record CreateRun(UUID agentVersionId, @NotBlank String datasetId, @NotBlank String scenarioId,
-                            int trialIndex, @NotBlank String mode, Map<String, Object> chaos) {}
+                            int trialIndex, @NotBlank String mode, Map<String, Object> chaos, String batchId) {}
     public record FinishRun(@NotBlank String status, Map<String, Object> metrics, String error) {}
 
     @PostMapping
     public Map<String, Object> create(@RequestBody CreateRun body) {
         EvalRun r = runs.create(body.agentVersionId(), body.datasetId(), body.scenarioId(),
-                body.trialIndex(), body.mode(), body.chaos());
-        return Map.of("id", r.getId().toString(), "status", r.getStatus());
+                body.trialIndex(), body.mode(), body.chaos(), body.batchId());
+        return Map.of("id", r.getId().toString(), "status", r.getStatus(), "batchId", r.getBatchId());
     }
 
     @PatchMapping("/{id}")
@@ -43,6 +46,7 @@ public class EvalController {
         EvalRun r = runs.get(id);
         return Map.of("id", r.getId().toString(), "scenarioId", r.getScenarioId(),
                 "trialIndex", r.getTrialIndex(), "mode", r.getMode(), "status", r.getStatus(),
+                "batchId", r.getBatchId() == null ? "" : r.getBatchId(),
                 "metrics", r.getMetrics() == null ? Map.of() : r.getMetrics(),
                 "error", r.getError() == null ? "" : r.getError());
     }
@@ -52,6 +56,15 @@ public class EvalController {
         return runs.listByVersion(agentVersionId).stream().map(r -> Map.<String, Object>of(
                 "id", r.getId().toString(), "scenarioId", r.getScenarioId(),
                 "trialIndex", r.getTrialIndex(), "mode", r.getMode(), "status", r.getStatus(),
+                "batchId", r.getBatchId() == null ? "" : r.getBatchId(),
                 "metrics", r.getMetrics() == null ? Map.of() : r.getMetrics())).toList();
+    }
+
+    /** Reset eval-mutable fixtures (tickets, approvals, grants, service
+     *  status) to their seeded state. The worker calls this before every
+     *  trial so earlier trials cannot satisfy later ones. */
+    @PostMapping("/fixtures/reset")
+    public Map<String, Object> resetFixtures() {
+        return fixtures.reset();
     }
 }

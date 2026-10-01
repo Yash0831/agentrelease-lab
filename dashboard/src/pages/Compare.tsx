@@ -18,12 +18,13 @@ export default function Compare({ keyVersion }: { keyVersion: number }) {
   const [policyId, setPolicyId] = useState("");
   const [datasetId, setDatasetId] = useState("");
   const [mode, setMode] = useState("fixture");
+  const [batchId, setBatchId] = useState("");
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [result, setResult] = useState<ReleaseDecisionDetail | null>(null);
 
   const ready = versions.data && policies.data && datasets.data;
-  const formValid = baselineId !== "" && candidateId !== "" && policyId !== "" && datasetId !== "";
+  const formValid = baselineId !== "" && candidateId !== "" && policyId !== "" && datasetId !== "" && batchId.trim() !== "";
 
   async function runEvaluation() {
     if (!formValid) return;
@@ -37,6 +38,7 @@ export default function Compare({ keyVersion }: { keyVersion: number }) {
         policyId,
         datasetId,
         mode,
+        batchId: batchId.trim(),
       });
       setResult(d);
     } catch (e) {
@@ -115,6 +117,16 @@ export default function Compare({ keyVersion }: { keyVersion: number }) {
                 ))}
               </select>
             </div>
+            <div className="form-field">
+              <label htmlFor="batchId">Evaluation batch</label>
+              <input
+                id="batchId"
+                type="text"
+                value={batchId}
+                onChange={(e) => setBatchId(e.target.value)}
+                placeholder="batch-… (from a benchmark or job run)"
+              />
+            </div>
           </div>
           <div className="btn-row">
             <button className="btn" disabled={!formValid || running} onClick={runEvaluation}>
@@ -144,7 +156,7 @@ export default function Compare({ keyVersion }: { keyVersion: number }) {
       )}
 
       {!result && !running && !runError && (
-        <Empty message="No evaluation yet — pick a baseline, candidate, policy, dataset, and mode, then run." />
+        <Empty message="No evaluation yet — pick a baseline, candidate, policy, dataset, batch, and mode, then run." />
       )}
     </div>
   );

@@ -86,6 +86,7 @@ export interface ReleasePolicy {
 export interface ReleaseDecisionSummary {
   id: string;
   verdict: string;
+  batchId: string;
   candidateVersionId: string;
   baselineVersionId: string;
   decidedAt: string;
@@ -94,6 +95,7 @@ export interface ReleaseDecisionSummary {
 export interface ReleaseDecisionDetail {
   id: string;
   verdict: string;
+  batchId: string;
   evidence: Record<string, unknown>;
   decidedAt: string;
 }
@@ -104,4 +106,5 @@ export interface EvaluateRequest {
   policyId: string;
   datasetId: string;
   mode: string;
+  batchId: string;
 }

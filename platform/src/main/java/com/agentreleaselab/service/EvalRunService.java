@@ -28,14 +28,15 @@ public class EvalRunService {
 
     @Transactional
     public EvalRun create(UUID agentVersionId, String datasetId, String scenarioId,
-                          int trialIndex, String mode, Map<String, Object> chaos) {
+                          int trialIndex, String mode, Map<String, Object> chaos, String batchId) {
         UUID tenantId = TenantContext.get().tenantId();
         versions.findByIdAndTenantId(agentVersionId, tenantId)
                 .orElseThrow(() -> ApiException.notFound("VERSION_NOT_FOUND", "No such agent version in your organization"));
         if (!List.of("fixture", "live", "replay").contains(mode)) {
             throw ApiException.badRequest("INVALID_MODE", "mode must be fixture|live|replay");
         }
-        EvalRun run = new EvalRun(tenantId, agentVersionId, datasetId, scenarioId, trialIndex, mode, chaos);
+        String batch = (batchId == null || batchId.isBlank()) ? "batch-" + UUID.randomUUID().toString().substring(0, 8) : batchId;
+        EvalRun run = new EvalRun(tenantId, batch, agentVersionId, datasetId, scenarioId, trialIndex, mode, chaos);
         run.setStatus("RUNNING");
         run.setStartedAt(Instant.now());
         return evalRuns.save(run);

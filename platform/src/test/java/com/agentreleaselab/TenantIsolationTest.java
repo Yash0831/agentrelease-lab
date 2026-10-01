@@ -101,7 +101,7 @@ class TenantIsolationTest extends ServiceTestBase {
                 Map.of(), Map.of(), "snap", "policy-v1");
         AgentVersion v = versions.save(new AgentVersion(tenantId, "x-tenant-eval-" + UUID.randomUUID(),
                 "prompt", "fixture-1.0", Map.of(), Map.of(), "snap", "policy-v1", fp));
-        EvalRun run = evalRuns.create(v.getId(), "ds-test", "s1", 0, "fixture", Map.of());
+        EvalRun run = evalRuns.create(v.getId(), "ds-test", "s1", 0, "fixture", Map.of(), "batch-tenant-test");
         UUID runId = run.getId();
         traces.record(runId, "tr", "sp", null, "test", "probe", Map.of());
 
@@ -114,7 +114,7 @@ class TenantIsolationTest extends ServiceTestBase {
                 .matches(e -> ((ApiException) e).getCode().equals("EVAL_RUN_NOT_FOUND"));
         // Cross-tenant version ids are also unusable: globex cannot evaluate
         // a decision on acme's version.
-        assertThatThrownBy(() -> decisions.evaluate(v.getId(), v.getId(), UUID.randomUUID(), "ds-test", "fixture"))
+        assertThatThrownBy(() -> decisions.evaluate(v.getId(), v.getId(), UUID.randomUUID(), "ds-test", "fixture", "batch-tenant-test"))
                 .isInstanceOf(ApiException.class)
                 .matches(e -> ((ApiException) e).getCode().equals("VERSION_NOT_FOUND"));
     }

@@ -25,6 +25,7 @@ export default function Decisions({ keyVersion }: { keyVersion: number }) {
                 <tr>
                   <th>Decision</th>
                   <th>Verdict</th>
+                  <th>Batch</th>
                   <th>Candidate</th>
                   <th>Baseline</th>
                   <th>Decided</th>
@@ -41,6 +42,7 @@ export default function Decisions({ keyVersion }: { keyVersion: number }) {
                     <td>
                       <VerdictBadge verdict={d.verdict} />
                     </td>
+                    <td className="mono">{d.batchId || "—"}</td>
                     <td className="mono">{d.candidateVersionId.slice(0, 8)}</td>
                     <td className="mono">{d.baselineVersionId.slice(0, 8)}</td>
                     <td>{fmtTs(d.decidedAt)}</td>

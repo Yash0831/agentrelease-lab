@@ -123,21 +123,27 @@ def register_versions(ctx: Ctx, model_id: str) -> dict:
             res = ctx.p("POST", "/api/agent-versions", json=body)
         except RuntimeError as e:
             if "409" in str(e):
-                res = next(v for v in ctx.p("GET", "/api/agent-versions")
-                           if v["name"] == name)
-                res = {"id": res["id"], "fingerprint": res["fingerprint"]}
+                existing = next(v for v in ctx.p("GET", "/api/agent-versions")
+                                if v["name"] == name)
+                if existing.get("modelId") != model_id:
+                    raise RuntimeError(
+                        f"version '{name}' already registered with modelId="
+                        f"'{existing.get('modelId')}', but this run needs '{model_id}'. "
+                        f"Use a fresh database or a different version name.")
+                res = {"id": existing["id"], "fingerprint": existing["fingerprint"]}
             else:
                 raise
         out[name] = res
-        print(f"  version {name}: fingerprint {res['fingerprint'][:12]}…")
+        print(f"  version {name}: fingerprint {res['fingerprint'][:12]}… (model {model_id})")
     return out
 
 
-def run_matrix(ctx: Ctx, versions: list[str], mode: str,
+def run_matrix(ctx: Ctx, versions: list[str], mode: str, batch_id: str,
                scenarios: list[str] | None = None) -> dict:
     payload = {"versions": versions, "dataset_id": DATASET_ID,
-               "scenarios": scenarios, "trials": TRIALS, "mode": mode}
-    print(f"  running {versions} x {scenarios or 'all'} x {TRIALS} ({mode})…")
+               "scenarios": scenarios, "trials": TRIALS, "mode": mode,
+               "batch_id": batch_id}
+    print(f"  running {versions} x {scenarios or 'all'} x {TRIALS} ({mode}, batch={batch_id})…")
     res = ctx.w("POST", "/jobs/run-sync", json=payload)
     n = len(res.get("trials", []))
     print(f"  finished {n} trials")
@@ -145,13 +151,14 @@ def run_matrix(ctx: Ctx, versions: list[str], mode: str,
 
 
 def evaluate(ctx: Ctx, versions: dict, candidate: str, baseline: str,
-             policy_name: str, mode: str) -> dict:
+             policy_name: str, mode: str, batch_id: str) -> dict:
     policies = ctx.p("GET", "/api/release-policies")
     policy = next(p for p in policies if p["name"] == policy_name)
     d = ctx.p("POST", "/api/release-decisions/evaluate", json={
         "candidateVersionId": versions[candidate]["id"],
         "baselineVersionId": versions[baseline]["id"],
-        "policyId": policy["id"], "datasetId": DATASET_ID, "mode": mode})
+        "policyId": policy["id"], "datasetId": DATASET_ID, "mode": mode,
+        "batchId": batch_id})
     print(f"  release decision for {candidate}: {d['verdict']}")
     return d
 
@@ -207,9 +214,22 @@ def main() -> int:
 
     ctx = Ctx(args.platform, args.worker, args.worker_key)
     mode = args.mode
-    model_id = "fixture-1.0" if mode == "fixture" else "live-configured"
+    if mode == "fixture":
+        model_id = "fixture-1.0"
+    else:
+        # Live (or replay): use the ACTUAL configured model identifier —
+        # never the placeholder "live-configured". Fail fast if the
+        # provider is not configured.
+        from app.config import settings as worker_settings
+        from app.llm import validate_live_config
+        model_id = validate_live_config()
+        print(f"live provider model: {model_id} @ {worker_settings.llm_base_url}")
+    # One batch per benchmark execution: repeated runs never collide and
+    # every run, trace, and decision is scoped to this batch.
+    batch_id = f"bench-{mode}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
     print("== AgentRelease Lab benchmark ==")
     print(f"mode={mode} (labeled on every run, metric, and report)")
+    print(f"batch_id={batch_id}")
 
     print("== registering agent versions ==")
     versions = register_versions(ctx, model_id)
@@ -217,8 +237,8 @@ def main() -> int:
               len({v["fingerprint"] for v in versions.values()}) == 4)
 
     print("== matrix 1: baseline vs candidate-flawed (expect BLOCKED) ==")
-    job1 = run_matrix(ctx, ["baseline", "candidate-flawed"], mode)
-    d1 = evaluate(ctx, versions, "candidate-flawed", "baseline", "default", mode)
+    job1 = run_matrix(ctx, ["baseline", "candidate-flawed"], mode, batch_id)
+    d1 = evaluate(ctx, versions, "candidate-flawed", "baseline", "default", mode, batch_id)
     ctx.check("flawed candidate is BLOCKED", d1["verdict"] == "BLOCKED",
               f"got {d1['verdict']}")
     ctx.check("blocker cites critical policy failure",
@@ -226,10 +246,11 @@ def main() -> int:
               str(d1["evidence"]["blockers"])[:160])
 
     print("== matrix 2: candidate-fixed only, baseline reused (expect PASS) ==")
-    # Baseline trials already exist from matrix 1; re-running them would
-    # collide with the (version, dataset, scenario, trial, mode) uniqueness.
-    job2 = run_matrix(ctx, ["candidate-fixed"], mode)
-    d2 = evaluate(ctx, versions, "candidate-fixed", "baseline", "default", mode)
+    # Baseline trials already exist in this batch from matrix 1; re-running
+    # them would collide on the (batch, version, dataset, scenario, trial,
+    # mode) uniqueness.
+    job2 = run_matrix(ctx, ["candidate-fixed"], mode, batch_id)
+    d2 = evaluate(ctx, versions, "candidate-fixed", "baseline", "default", mode, batch_id)
     ctx.check("fixed candidate PASSES", d2["verdict"] == "PASS",
               f"got {d2['verdict']}")
 
@@ -239,10 +260,10 @@ def main() -> int:
         "thresholds": {"min_trials_per_scenario": 2, "min_task_success_rate": 0.9,
                        "max_p95_latency_ms": 30000, "max_cost_per_run_usd": 0.50,
                        "required_scenarios": ["regression-set", "happy-path-vpn"]}})
-    job3 = run_matrix(ctx, ["candidate-regressed"], mode,
+    job3 = run_matrix(ctx, ["candidate-regressed"], mode, batch_id,
                       scenarios=["regression-set", "happy-path-vpn"])
     d3 = evaluate(ctx, versions, "candidate-regressed", "baseline",
-                  "regression-only", mode)
+                  "regression-only", mode, batch_id)
     ctx.check("regressed candidate FAILS thresholds", d3["verdict"] == "FAIL",
               f"got {d3['verdict']}")
 
@@ -258,6 +279,7 @@ def main() -> int:
     report = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "mode": mode,
+        "batch_id": batch_id,
         "model_id": model_id,
         "dataset": DATASET_ID,
         "trials_per_scenario": TRIALS,

@@ -14,6 +14,7 @@ public class ReleaseDecision {
     @Column(name = "candidate_version_id", nullable = false) private UUID candidateVersionId;
     @Column(name = "baseline_version_id", nullable = false) private UUID baselineVersionId;
     @Column(name = "policy_id", nullable = false) private UUID policyId;
+    @Column(name = "batch_id") private String batchId;
     @Column(nullable = false) private String verdict;
     @Column(name = "evidence_json", nullable = false, columnDefinition = "jsonb")
     @JdbcTypeCode(SqlTypes.JSON)
@@ -21,15 +22,16 @@ public class ReleaseDecision {
     @Column(name = "decided_at", nullable = false) private Instant decidedAt = Instant.now();
 
     protected ReleaseDecision() {}
-    public ReleaseDecision(UUID tenantId, UUID candidateVersionId, UUID baselineVersionId, UUID policyId,
+    public ReleaseDecision(UUID tenantId, String batchId, UUID candidateVersionId, UUID baselineVersionId, UUID policyId,
                            String verdict, Map<String, Object> evidence) {
-        this.id = UUID.randomUUID(); this.tenantId = tenantId;
+        this.id = UUID.randomUUID(); this.tenantId = tenantId; this.batchId = batchId;
         this.candidateVersionId = candidateVersionId;
         this.baselineVersionId = baselineVersionId; this.policyId = policyId;
         this.verdict = verdict; this.evidence = evidence;
     }
     public UUID getId() { return id; }
     public UUID getTenantId() { return tenantId; }
+    public String getBatchId() { return batchId; }
     public UUID getCandidateVersionId() { return candidateVersionId; }
     public UUID getBaselineVersionId() { return baselineVersionId; }
     public UUID getPolicyId() { return policyId; }

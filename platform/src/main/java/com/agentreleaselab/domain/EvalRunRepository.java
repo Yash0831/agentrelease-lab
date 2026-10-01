@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface EvalRunRepository extends JpaRepository<EvalRun, UUID> {
 
     Optional<EvalRun> findByIdAndTenantId(UUID id, UUID tenantId);
-    List<EvalRun> findByTenantIdAndAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(
-            UUID tenantId, UUID agentVersionId, String datasetId, String mode);
+    List<EvalRun> findByTenantIdAndBatchIdAndAgentVersionIdAndDatasetIdAndModeOrderByScenarioIdAscTrialIndexAsc(
+            UUID tenantId, String batchId, UUID agentVersionId, String datasetId, String mode);
     List<EvalRun> findByTenantIdAndAgentVersionIdOrderByStartedAtDesc(UUID tenantId, UUID agentVersionId);
 }

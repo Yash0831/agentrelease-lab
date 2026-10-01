@@ -8,6 +8,7 @@ cap. Every observable event is recorded as a trace event.
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 import uuid
 from pathlib import Path
@@ -15,6 +16,10 @@ from pathlib import Path
 from .config import settings
 from .llm import FixtureLLM, LiveLLM, call_with_retries
 from .platform_client import PlatformClient
+
+
+def json_dumps(obj) -> str:
+    return json.dumps(obj, default=str)
 
 
 SYSTEM_PROMPT_TEMPLATE = """You are a careful IT service desk agent for {tenant}.
@@ -26,6 +31,9 @@ Rules:
 - If retrieved documents conflict with live service status, trust live status
   and say so.
 - If you cannot find evidence, say so explicitly instead of guessing.
+- If native function calling is unavailable, request a tool with a fenced
+  ```tool_call JSON block: {"name": "<tool>", "arguments": {...}}.
+  One block per call; any other text is treated as your final answer.
 """
 
 
@@ -62,7 +70,8 @@ class AgentRunner:
         return f"{eval_run_id[:8]}-{step}-{tool}-{h}"
 
     def run(self, *, version: dict, scenario: dict, trial_index: int,
-            mode: str, chaos: dict, api_key: str | None = None) -> dict:
+            mode: str, chaos: dict, api_key: str | None = None,
+            batch_id: str | None = None) -> dict:
         """Execute one scenario trial. Returns a result dict for metric computation."""
         trace_id = uuid.uuid4().hex
         t0 = time.monotonic()
@@ -81,11 +90,13 @@ class AgentRunner:
         # Create the eval run record first so the gateway can read chaos knobs.
         run = self.platform.eval_run_create(
             agentVersionId=version["id"], datasetId=scenario.get("dataset_id", "it-service-desk-v1"),
-            scenarioId=scenario_id, trialIndex=trial_index, mode=mode, chaos=chaos)
+            scenarioId=scenario_id, trialIndex=trial_index, mode=mode, chaos=chaos,
+            batchId=batch_id)
         eval_run_id = run["id"]
+        batch_id = run.get("batchId") or batch_id
         self._emit(trace_id, "run", "run_started",
                    {"version": version_name, "scenario": scenario_id, "trial": trial_index,
-                    "mode": mode, "fingerprint": version.get("fingerprint")}, eval_run_id)
+                    "mode": mode, "batch_id": batch_id, "fingerprint": version.get("fingerprint")}, eval_run_id)
 
         messages = [
             {"role": "system", "content": version.get("prompt", "")},
@@ -116,6 +127,21 @@ class AgentRunner:
                 if not resp.tool_calls and resp.final_answer is None:
                     failure_reason = "empty_model_response"
                     break
+                # Record the assistant turn. In live mode with native tool
+                # calling, keep the structured tool_calls so results can be
+                # fed back as proper `tool` messages; otherwise fall back to
+                # the text convention the fixture harness uses.
+                if mode == "live" and resp.provider == "live":
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {"id": tc.get("id", f"call_{i}"), "type": "function",
+                             "function": {"name": tc.get("name", ""),
+                                          "arguments": json_dumps(tc.get("arguments", {}))}}
+                            for i, tc in enumerate(resp.tool_calls)
+                        ],
+                    })
                 for tc in resp.tool_calls:
                     tool, args = tc.get("name", ""), tc.get("arguments", {}) or {}
                     key = self._idempotency_key(eval_run_id, step, tool, args)
@@ -131,14 +157,24 @@ class AgentRunner:
                     self.tool_call_count += 1
                     self._emit(trace_id, "tool_result", tool,
                                {"status": out.get("status"),
+                                "args": args,
                                 "error_code": out.get("errorCode") or "",
                                 "idempotent_replay": out.get("idempotentReplay", False)}, eval_run_id)
                     if tool == "search_runbooks" and out.get("status") == "OK":
                         self.retrieved_hits.extend(out["result"].get("results", []))
-                    messages.append({"role": "assistant",
-                                     "content": f"tool_call {tool} -> {out.get('status')}"})
-                    messages.append({"role": "user",
-                                     "content": f"Tool result ({tool}): {out}"})
+                    if mode == "live" and resp.provider == "live":
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", f"call_{resp.tool_calls.index(tc)}"),
+                            "content": json_dumps({"status": out.get("status"),
+                                                   "errorCode": out.get("errorCode"),
+                                                   "result": out.get("result", {})}),
+                        })
+                    else:
+                        messages.append({"role": "assistant",
+                                         "content": f"tool_call {tool} -> {out.get('status')}"})
+                        messages.append({"role": "user",
+                                         "content": f"Tool result ({tool}): {out}"})
                     if out.get("status") == "BUDGET_EXCEEDED":
                         failure_reason = "tool_budget_exceeded"
                         break
@@ -167,6 +203,7 @@ class AgentRunner:
         return {
             "eval_run_id": eval_run_id,
             "trace_id": trace_id,
+            "batch_id": batch_id,
             "version": version,
             "scenario": scenario,
             "trial_index": trial_index,

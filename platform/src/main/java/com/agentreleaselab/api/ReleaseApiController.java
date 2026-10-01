@@ -60,13 +60,14 @@ public class ReleaseApiController {
     }
 
     public record EvaluateRequest(UUID candidateVersionId, UUID baselineVersionId,
-                                  UUID policyId, String datasetId, String mode) {}
+                                  UUID policyId, String datasetId, String mode, String batchId) {}
 
     @PostMapping("/api/release-decisions/evaluate")
     public Map<String, Object> evaluate(@RequestBody EvaluateRequest body) {
         ReleaseDecision d = gate.evaluate(body.candidateVersionId(), body.baselineVersionId(),
-                body.policyId(), body.datasetId(), body.mode());
+                body.policyId(), body.datasetId(), body.mode(), body.batchId());
         return Map.of("id", d.getId().toString(), "verdict", d.getVerdict(),
+                "batchId", d.getBatchId() == null ? "" : d.getBatchId(),
                 "evidence", d.getEvidence(), "decidedAt", d.getDecidedAt().toString());
     }
 
@@ -74,6 +75,7 @@ public class ReleaseApiController {
     public List<Map<String, Object>> decisions() {
         return gate.list().stream().map(d -> Map.<String, Object>of(
                 "id", d.getId().toString(), "verdict", d.getVerdict(),
+                "batchId", d.getBatchId() == null ? "" : d.getBatchId(),
                 "candidateVersionId", d.getCandidateVersionId().toString(),
                 "baselineVersionId", d.getBaselineVersionId().toString(),
                 "decidedAt", d.getDecidedAt().toString())).toList();

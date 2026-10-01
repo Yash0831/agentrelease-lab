@@ -1,5 +1,6 @@
 package com.agentreleaselab.api;
 
+import com.agentreleaselab.domain.ToolCallRepository;
 import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ToolGatewayService;
 import jakarta.validation.constraints.NotBlank;
@@ -14,9 +15,11 @@ import java.util.UUID;
 public class ToolGatewayController {
 
     private final ToolGatewayService gateway;
+    private final ToolCallRepository toolCalls;
 
-    public ToolGatewayController(ToolGatewayService gateway) {
+    public ToolGatewayController(ToolGatewayService gateway, ToolCallRepository toolCalls) {
         this.gateway = gateway;
+        this.toolCalls = toolCalls;
     }
 
     public record ExecuteRequest(@NotBlank String tool, Map<String, Object> args,
@@ -44,5 +47,20 @@ public class ToolGatewayController {
     @GetMapping("/allowlist")
     public Map<String, Object> allowlist() {
         return Map.of("tools", ToolGatewayService.AGENT_TOOLS.stream().sorted().toList());
+    }
+
+    /** Look up a persisted tool call by idempotency key. Used by the
+     *  duplicate-write probe to verify exactly-once against stored state,
+     *  not just the replay flag. */
+    @GetMapping("/calls")
+    public Map<String, Object> byIdempotencyKey(@RequestParam String idempotencyKey) {
+        var ctx = TenantContext.get();
+        return toolCalls.findByTenantIdAndIdempotencyKey(ctx.tenantId(), idempotencyKey)
+                .map(c -> Map.<String, Object>of(
+                        "id", c.getId().toString(),
+                        "toolName", c.getToolName(),
+                        "status", c.getStatus(),
+                        "idempotencyKey", c.getIdempotencyKey()))
+                .orElse(Map.of("found", false));
     }
 }

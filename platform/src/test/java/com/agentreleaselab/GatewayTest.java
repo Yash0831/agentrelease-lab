@@ -136,7 +136,7 @@ class GatewayTest extends ServiceTestBase {
                 Map.of(), Map.of(), "snap", "policy-v1");
         AgentVersion v = versions.save(new AgentVersion(tenantId, "gw-budget-" + UUID.randomUUID(),
                 "prompt", "fixture-1.0", Map.of(), Map.of(), "snap", "policy-v1", fp));
-        UUID runId = runs.create(v.getId(), "ds-test", "s1", 0, "fixture", Map.of()).getId();
+        UUID runId = runs.create(v.getId(), "ds-test", "s1", 0, "fixture", Map.of(), "batch-gateway-test").getId();
         var c1 = gateway.execute("get_service_status", Map.of(), "k-b1", runId, "t", chaos);
         var c2 = gateway.execute("get_service_status", Map.of(), "k-b2", runId, "t", chaos);
         assertThat(c1.status()).isEqualTo("OK");
