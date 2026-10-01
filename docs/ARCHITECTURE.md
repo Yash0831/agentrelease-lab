@@ -65,7 +65,7 @@ PostgreSQL, independent of the tracing backend.
   because those are enforced in Java code paths the model cannot reach.
 - **Deterministic fixture mode.** For CI and cheap regression runs, the worker
   can use scripted, deterministic LLM responses. Fixture mode is labeled at
-  every layer and never presented as live AI (see ADR-0004).
+  every layer (`mode: fixture`; see ADR-0004).
 - **Recorded-response replay.** The worker can replay a recorded transcript
   for debugging. Replay is explicitly documented as *not* reproducing a fresh
   model's behavior (ADR-0006).

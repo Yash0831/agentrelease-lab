@@ -6,8 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 
-/** Stable fingerprints for agent configs (requirement 1) and approval actions
- *  (ADR-0005). Canonical JSON (sorted keys) -> SHA-256 hex. */
+/** Stable fingerprints for agent configs and approval actions (ADR-0005).
+ *  Canonical JSON (sorted keys) -> SHA-256 hex. */
 public final class FingerprintService {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();

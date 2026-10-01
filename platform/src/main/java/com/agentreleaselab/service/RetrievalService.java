@@ -7,7 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 
-/** Permission-aware retrieval (requirement 2, ADR-0003).
+/** Permission-aware retrieval (ADR-0003).
  *  Tenant + CURRENT + role filters are applied in SQL before vector ordering,
  *  so a model can never widen its own access. */
 @Service

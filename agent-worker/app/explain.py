@@ -1,4 +1,4 @@
-"""Evidence-based failure analysis (requirement 7).
+"""Failure analysis from trace evidence.
 
 Produces an incident explanation that:
 - references ACTUAL trace events and configuration changes (observed facts),

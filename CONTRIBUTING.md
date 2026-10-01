@@ -6,7 +6,7 @@
    savings, uptime, or resume metrics. Synthetic demo data must be labeled
    (`DEMO` / `synthetic`). Runtime measurements must be real measurements of
    what you actually ran, with the environment noted.
-2. **Fixture honesty.** Fixture-mode LLM responses are deterministic test doubles.
+2. **Label fixture mode.** Fixture-mode LLM responses are deterministic test doubles.
    Never present them as live AI output. The `mode` field (`fixture` / `live` /
    `replay`) must be preserved end-to-end: worker → trace events → metrics →
    dashboard → reports.

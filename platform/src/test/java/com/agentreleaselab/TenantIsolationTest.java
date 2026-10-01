@@ -24,7 +24,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Requirement 2: one organization cannot retrieve another's documents or records. */
+/** One organization cannot retrieve another's documents or records. */
 @Transactional
 class TenantIsolationTest extends ServiceTestBase {
 

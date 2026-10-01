@@ -19,7 +19,7 @@ export default function Overview({ keyVersion }: { keyVersion: number }) {
     <div>
       <div className="page-head">
         <h1>AgentRelease Lab</h1>
-        <p>Evidence-backed release decisions for AI agents. Every metric shown comes from stored execution results.</p>
+        <p>Release decisions for AI agents. Every metric shown comes from stored execution results.</p>
       </div>
 
       {loading && <Loading label="Checking platform health…" />}

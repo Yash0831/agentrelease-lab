@@ -3,7 +3,7 @@
 Single source of truth for what is implemented, tested, and remaining.
 Updated as increments land. Dates are 2026-09-29 unless noted.
 
-## Increments (per brief §IMPLEMENTATION ORDER)
+## Increments
 
 | # | Increment | Status | Verified how |
 |---|-----------|--------|--------------|

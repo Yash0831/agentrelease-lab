@@ -3,29 +3,30 @@
 **Can we safely release this new version of our AI agent — and what evidence
 supports that decision?**
 
-AgentRelease Lab is a working engineering project (not a mockup) that answers
-that question for AI agents which retrieve internal documents and call
-business APIs. It runs a baseline and candidate agent versions against the
+AgentRelease Lab evaluates AI agent updates against repeatable failure
+scenarios and compares their results with a baseline to support release
+decisions. It targets agents that retrieve internal documents and call
+business APIs: it runs a baseline and candidate agent versions against the
 same failure-injection scenarios, measures safety and quality outcomes, and
-renders an evidence-backed release decision.
+renders a release decision with traceable evidence.
 
 ## What it is
 
-A realistic IT service-desk environment with two isolated organizations,
+A multi-tenant IT service-desk environment with two isolated organizations,
 role-based users, versioned runbooks, tickets, service status, and an
 access-request API — plus:
 
-- a **real AI agent** (configurable OpenAI-compatible LLM provider, or a
-  deterministic **fixture mode** for cheap CI — always labeled, never
-  presented as live AI),
+- an **agent worker** with a configurable OpenAI-compatible LLM provider, or
+  deterministic **fixture mode** (scripted responses, labeled
+  `mode: fixture`),
 - a **tool gateway** that enforces allowlists, JSON-schema argument
   validation, timeouts, action budgets, and idempotency keys *independently of
   the model*,
 - an **approval workflow** where sensitive access changes need a human
   reviewer, with the approval fingerprint revalidated at execution time,
 - an **evaluation engine** with deterministic checks (permissions, state
-  changes, citations, schema validity, duplicates) and an optional,
-  labeled-probabilistic LLM judge,
+  changes, citations, schema validity, duplicates) and an optional LLM judge
+  (labeled probabilistic; excluded from critical gate checks),
 - a **release gate** where critical security failures block independently of
   average scores, and sparse evidence yields `INSUFFICIENT_EVIDENCE`,
 - a **dashboard** with versions, datasets, baseline-vs-candidate comparison,
@@ -74,9 +75,9 @@ Use API key `arl-acme-admin-demo` (synthetic demo keys are listed below).
 4. Demonstrates the approval workflow (reviewer approves, agent executes,
    replay rejected) and writes `benchmarks/reports/eval-report-*.json`.
 
-Every number in the report comes from actual runs. Fixture-mode runs are
-labeled `mode: fixture` everywhere — they measure harness behavior, not model
-quality.
+Reports are generated from actual runs and labeled with their mode.
+Fixture-mode runs (`mode: fixture`) use scripted model responses; they
+measure harness behavior, not model quality.
 
 ## Synthetic demo credentials
 
@@ -107,15 +108,18 @@ docs/            ARCHITECTURE, THREAT_MODEL, LIMITATIONS, API, ADRs
 screenshots/     captured from the running application
 ```
 
-## Evidence & honesty rules
+## Scope and limitations
 
-- Synthetic demo data is labeled (`synthetic`, `DEMO`); there are no
-  production customers, incidents, or metrics anywhere.
-- Runtime measurements (latency, cost) in checked-in reports are real
-  measurements of local fixture-mode runs — not production claims.
-- Recorded-response replay reproduces execution for debugging, not a fresh
-  model's nondeterministic behavior.
-- See `docs/LIMITATIONS.md` and `docs/THREAT_MODEL.md`.
+- All tenants, users, tickets, runbooks, and statuses are synthetic demo
+  data. There are no production customers, incidents, or metrics.
+- Latency and cost numbers in checked-in reports were measured in a local
+  sandbox running fixture mode — not production SLOs.
+- Recorded-response replay reproduces a past transcript for debugging; it
+  does not reproduce a fresh model's nondeterministic behavior.
+- The live LLM provider path is implemented but was not exercised against a
+  real provider in this environment; see `docs/LIMITATIONS.md` for its
+  status.
+- Full details: `docs/LIMITATIONS.md` and `docs/THREAT_MODEL.md`.
 
 ## Repository & CI
 

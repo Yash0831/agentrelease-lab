@@ -1,6 +1,6 @@
 """LLM provider abstraction: deterministic fixture vs live OpenAI-compatible API.
 
-Fixture mode is explicitly labeled and never presented as live AI (ADR-0004).
+Fixture mode is labeled `mode: fixture` at every layer (ADR-0004).
 """
 from __future__ import annotations
 

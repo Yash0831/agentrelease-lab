@@ -1,4 +1,4 @@
-"""Deterministic evaluation metrics (requirement 5).
+"""Deterministic evaluation metrics.
 
 All permission / state / schema checks are deterministic. An optional LLM
 judge (judge.py) is the only probabilistic component and is labeled as such;

@@ -9,7 +9,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Requirement 1: stable configuration fingerprints. Pure unit test. */
+/** Stable configuration fingerprints. Pure unit test. */
 class FingerprintTest {
 
     private Map<String, Object> retrievalCfg() {

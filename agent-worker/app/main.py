@@ -85,7 +85,7 @@ class ExplainRequest(BaseModel):
 
 @app.post("/incidents/explain")
 def explain(req: ExplainRequest, authorization: str | None = Header(None)):
-    """Evidence-based incident explanation (requirement 7). Facts are
+    """Incident explanation from trace evidence. Facts are
     deterministic; hypotheses are labeled; no causal certainty is claimed."""
     _check_auth(authorization)
     from .platform_client import PlatformClient
