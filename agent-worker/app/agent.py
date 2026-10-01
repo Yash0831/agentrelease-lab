@@ -178,6 +178,8 @@ class AgentRunner:
                                 "idempotent_replay": out.get("idempotentReplay", False)}, eval_run_id)
                     step_tool_executions.append({"tool": tool, "args": args,
                                                  "status": out.get("status"),
+                                                 "error_code": out.get("errorCode") or "",
+                                                 "error_message": out.get("errorMessage") or "",
                                                  "result": out.get("result", {})})
                     if tool == "search_runbooks" and out.get("status") == "OK":
                         self.retrieved_hits.extend(out["result"].get("results", []))

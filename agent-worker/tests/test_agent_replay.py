@@ -39,10 +39,10 @@ def _platform():
     return p
 
 
-def _write_recording(tmp_path, turns):
+def _write_recording(tmp_path, turns, schema_version=2):
     """Write a recording JSON directly (bypasses TurnRecorder)."""
     data = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "mode": "live",
         "model_id": "test-model",
         "version": {"name": "baseline", "fingerprint": "fp-abc123"},
@@ -60,16 +60,24 @@ def _write_recording(tmp_path, turns):
     return path
 
 
-def _turn(step, tool_calls=None, content=None, executions=None):
+def _turn(step, tool_calls=None, content=None, executions=None,
+          citations=None):
     return {
         "step": step,
         "response": {
             "tool_calls": tool_calls or [],
             "content": content,
+            "citations": citations if citations is not None else [],
             "input_tokens": 10, "output_tokens": 5,
             "provider": "live", "model": "test-model",
         },
-        "tool_executions": executions or [],
+        "tool_executions": [
+            {"tool": e["tool"], "args": e["args"], "status": e["status"],
+             "error_code": e.get("error_code", ""),
+             "error_message": e.get("error_message", ""),
+             "result": e.get("result", {})}
+            for e in (executions or [])
+        ],
     }
 
 
@@ -222,14 +230,21 @@ def test_replay_tool_executor_returns_recorded_result(tmp_path):
 
 
 def test_replay_tool_executor_rejects_incomplete_recording(tmp_path):
-    path = _write_recording(tmp_path, [
-        _turn(0,
-              tool_calls=[{"id": "c1", "name": "get_ticket",
-                           "arguments": {"ticketKey": "ACME-101"}}],
-              executions=[{"tool": "get_ticket",
-                           "args": {"ticketKey": "ACME-101"},
-                           "status": "OK"}]),  # no "result" key
-    ])
+    # Raw recording: a tool execution without a "result" key (bypasses the
+    # _turn helper, which normalizes keys).
+    raw_turn = {
+        "step": 0,
+        "response": {"tool_calls": [{"id": "c1", "name": "get_ticket",
+                                     "arguments": {"ticketKey": "ACME-101"}}],
+                     "content": None, "citations": [],
+                     "input_tokens": 10, "output_tokens": 5,
+                     "provider": "live", "model": "test-model"},
+        "tool_executions": [{"tool": "get_ticket",
+                             "args": {"ticketKey": "ACME-101"},
+                             "status": "OK",
+                             "error_code": "", "error_message": ""}],
+    }
+    path = _write_recording(tmp_path, [raw_turn])
     with pytest.raises(RecordingError, match="incomplete"):
         ReplayToolExecutor(path)
 
@@ -251,3 +266,158 @@ def test_recording_sanitizes_tool_results(tmp_path):
     assert "api_key" not in clean
     assert "password" not in clean["nested"]
     assert clean["nested"]["status"] == "open"
+
+
+# --- Fix 1 (round 2): citations and tool error fields are preserved --------
+
+def test_replay_restores_citations(tmp_path):
+    """A response recorded with one citation must replay with that citation,
+    not zero citations."""
+    from app.replay import ReplayLLM
+    citations = [{"slug": "vpn-reset", "version": 3,
+                  "claim": "reset the VPN client"}]
+    path = _write_recording(tmp_path, [
+        _turn(0, content="Reset the client per the runbook.",
+              citations=citations),
+    ])
+    llm = ReplayLLM(path)
+    r = llm.complete(version_name="baseline", scenario_id="happy-path-vpn",
+                     step=0, messages=[], chaos={})
+    assert r.citations == citations
+
+
+def test_replay_tool_executor_returns_error_fields(tmp_path):
+    """A recorded TICKET_NOT_FOUND error must replay with its error code
+    and message, not an empty error code."""
+    path = _write_recording(tmp_path, [
+        _turn(0,
+              tool_calls=[{"id": "c1", "name": "get_ticket",
+                           "arguments": {"ticketKey": "T-999"}}],
+              executions=[{"tool": "get_ticket",
+                           "args": {"ticketKey": "T-999"},
+                           "status": "ERROR",
+                           "error_code": "TICKET_NOT_FOUND",
+                           "error_message": "ticket T-999 not found"}]),
+    ])
+    ex = ReplayToolExecutor(path)
+    out = ex.execute(0, "get_ticket", {"ticketKey": "T-999"})
+    assert out["status"] == "ERROR"
+    assert out["errorCode"] == "TICKET_NOT_FOUND"
+    assert out["errorMessage"] == "ticket T-999 not found"
+
+
+def test_legacy_schema1_recording_rejected_explicitly(tmp_path):
+    """Schema-1 recordings lack citations and error fields. Replay must
+    reject them with a clear message, not silently replay empty evidence."""
+    from app.replay import ReplayLLM
+    legacy_turn = {
+        "step": 0,
+        "response": {"tool_calls": [], "content": "done",
+                     "input_tokens": 1, "output_tokens": 1,
+                     "provider": "live", "model": "test-model"},
+        "tool_executions": [{"tool": "get_ticket", "args": {},
+                             "status": "OK", "result": {}}],
+    }
+    path = _write_recording(tmp_path, [legacy_turn], schema_version=1)
+    with pytest.raises(RecordingError, match="older|re-record"):
+        ReplayLLM(path)
+    with pytest.raises(RecordingError, match="older|re-record"):
+        ReplayToolExecutor(path)
+
+
+def test_recording_sanitizes_error_message():
+    from app.replay import _sanitize_text
+    assert _sanitize_text("ticket T-999 not found") == "ticket T-999 not found"
+    redacted = _sanitize_text("gateway refused: api_key=abc123 leaked")
+    assert "abc123" not in redacted
+    assert "api_key=<redacted>" in redacted
+    assert _sanitize_text(None) == ""
+
+
+def test_roundtrip_record_and_replay_preserves_evidence(tmp_path, monkeypatch):
+    """Full round trip through AgentRunner: execute (record), then replay.
+    Citations, tool outcomes, and error codes must match; replay must make
+    no live model calls and no business mutations."""
+    import app.llm as llm_mod
+    import app.replay as replay_mod
+    from app.replay import TurnRecorder
+
+    citations = [{"slug": "vpn-reset", "version": 3}]
+    provider = _ScriptedProvider([
+        LLMResponse(
+            tool_calls=[{"id": "c1", "name": "search_runbooks",
+                         "arguments": {"query": "vpn"}}],
+            citations=citations, provider="fixture", model="fixture-1.0"),
+        LLMResponse(
+            tool_calls=[{"id": "c2", "name": "get_ticket",
+                         "arguments": {"ticketKey": "T-999"}}],
+            provider="fixture", model="fixture-1.0"),
+        LLMResponse(final_answer="Ticket T-999 was not found.",
+                    citations=citations,
+                    provider="fixture", model="fixture-1.0"),
+    ])
+
+    def boom(*a, **kw):
+        raise AssertionError("network call attempted")
+
+    def platform_v1():
+        p = _platform()
+
+        def tool_execute(*, tool, args, idempotency_key, eval_run_id,
+                         trace_id):
+            if tool == "search_runbooks":
+                return {"status": "OK",
+                        "result": {"results": [{"slug": "vpn-reset",
+                                                "version": 3,
+                                                "title": "VPN reset"}]}}
+            if tool == "get_ticket":
+                return {"status": "ERROR",
+                        "errorCode": "TICKET_NOT_FOUND",
+                        "errorMessage": "ticket T-999 not found",
+                        "result": {}}
+            raise AssertionError(f"unexpected tool {tool}")
+
+        p.tool_execute.side_effect = tool_execute
+        return p
+
+    monkeypatch.setattr(replay_mod, "RECORDINGS_DIR", tmp_path)
+    recorder = TurnRecorder(version=_version(), scenario_id="happy-path-vpn",
+                            trial_index=0, batch_id="batch-1",
+                            model_id="fixture-1.0", mode="fixture")
+    runner1 = AgentRunner(platform_v1(), provider=provider, recorder=recorder)
+    result1 = runner1.run(version=_version(), scenario=_scenario(),
+                          trial_index=0, mode="fixture", chaos={})
+    assert result1["failure_reason"] is None
+    assert result1["citations"] == citations
+    recording_path = result1["recording_path"]
+    assert recording_path is not None
+
+    # The recording itself carries the evidence.
+    data = json.loads(Path(recording_path).read_text())
+    assert data["turns"][0]["response"]["citations"] == citations
+    err_exec = data["turns"][1]["tool_executions"][0]
+    assert err_exec["status"] == "ERROR"
+    assert err_exec["error_code"] == "TICKET_NOT_FOUND"
+    assert "T-999" in err_exec["error_message"]
+
+    # Replay with a hostile platform: any tool_execute call fails the test.
+    monkeypatch.setattr(llm_mod.httpx, "post", boom)
+    monkeypatch.setattr(llm_mod.httpx, "get", boom)
+    platform2 = _platform()
+    platform2.tool_execute.side_effect = boom
+    runner2 = AgentRunner(platform2, recording_path=recording_path)
+    result2 = runner2.run(version=_version(), scenario=_scenario(),
+                          trial_index=0, mode="replay", chaos={})
+
+    assert result2["failure_reason"] is None
+    assert result2["final_answer"] == result1["final_answer"]
+    assert result2["citations"] == result1["citations"] == citations
+    assert result2["tool_call_count"] == result1["tool_call_count"] == 2
+    # The replayed error outcome matches the original.
+    tool_results = [e for e in result2["events"] if e["kind"] == "tool_result"]
+    by_tool = {e["name"]: e["payload"] for e in tool_results}
+    assert by_tool["get_ticket"]["status"] == "ERROR"
+    assert by_tool["get_ticket"]["error_code"] == "TICKET_NOT_FOUND"
+    assert by_tool["search_runbooks"]["status"] == "OK"
+    # No live model calls, no business mutations.
+    platform2.tool_execute.assert_not_called()
