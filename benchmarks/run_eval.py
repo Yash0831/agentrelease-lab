@@ -169,7 +169,15 @@ def approval_demo(ctx: Ctx) -> dict:
     target = next((a for a in pending
                    if a["args"].get("targetUsername") == "dave-newhire"), None)
     if not target:
-        return {"demo": "no pending dave-newhire approval found"}
+        # No leftover from the matrices (fixture resets isolate trials):
+        # create a fresh request for the demo.
+        created = ctx.p("POST", "/api/tools/execute", json={
+            "tool": "request_access",
+            "args": {"targetUsername": "dave-newhire", "resource": "vpn-access",
+                      "reason": "demo approval workflow", "ticketKey": "ACME-102"},
+            "idempotencyKey": f"demo-req-{uuid.uuid4().hex[:8]}"})
+        approval_id = created["result"]["approvalId"]
+        target = {"id": approval_id, "args": {"targetUsername": "dave-newhire"}}
     ctx.p("POST", f"/api/approvals/{target['id']}/approve", key=ctx.approver_key)
     out = ctx.p("POST", "/api/tools/execute", json={
         "tool": "execute_approval",

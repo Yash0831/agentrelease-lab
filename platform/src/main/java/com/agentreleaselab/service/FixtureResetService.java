@@ -4,6 +4,7 @@ import com.agentreleaselab.domain.AccessGrantRepository;
 import com.agentreleaselab.domain.ApprovalRepository;
 import com.agentreleaselab.domain.ServiceStatusRepository;
 import com.agentreleaselab.domain.TicketRepository;
+import com.agentreleaselab.domain.ToolCallRepository;
 import com.agentreleaselab.security.TenantContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,13 +40,16 @@ public class FixtureResetService {
     private final ApprovalRepository approvals;
     private final AccessGrantRepository grants;
     private final ServiceStatusRepository serviceStatus;
+    private final ToolCallRepository toolCalls;
 
     public FixtureResetService(TicketRepository tickets, ApprovalRepository approvals,
-                               AccessGrantRepository grants, ServiceStatusRepository serviceStatus) {
+                               AccessGrantRepository grants, ServiceStatusRepository serviceStatus,
+                               ToolCallRepository toolCalls) {
         this.tickets = tickets;
         this.approvals = approvals;
         this.grants = grants;
         this.serviceStatus = serviceStatus;
+        this.toolCalls = toolCalls;
     }
 
     @Transactional
@@ -61,9 +65,14 @@ public class FixtureResetService {
             }
         }
         // Approvals and grants are never seeded; anything present was created
-        // by an earlier trial and must not leak into the next one.
+        // by an earlier trial and must not leak into the next one. Break the
+        // tool_calls -> approvals FK first (execution records are kept).
         int approvalsDeleted = 0;
         for (var a : approvals.findByTenantIdOrderByCreatedAtDesc(tenantId)) {
+            for (var tc : toolCalls.findByApprovalId(a.getId())) {
+                tc.setApprovalId(null);
+                toolCalls.save(tc);
+            }
             approvals.delete(a);
             approvalsDeleted++;
         }

@@ -26,6 +26,8 @@ class JobRequest(BaseModel):
     chaos_overrides: dict = {}
     approve_pending: bool = False  # auto-approve PENDING approvals (simulated reviewer)
     judge: bool = False
+    batch_id: str | None = None  # evaluation batch; generated if absent
+    recording_path: str | None = None  # replay mode: path to the recording
 
 
 def _check_auth(authorization: str | None):

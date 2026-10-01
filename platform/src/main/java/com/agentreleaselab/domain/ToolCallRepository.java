@@ -12,5 +12,6 @@ public interface ToolCallRepository extends JpaRepository<ToolCall, UUID> {
 
     Optional<ToolCall> findByTenantIdAndIdempotencyKey(UUID tenantId, String idempotencyKey);
     List<ToolCall> findByEvalRunIdOrderByStartedAtAsc(UUID evalRunId);
+    List<ToolCall> findByApprovalId(UUID approvalId);
     long countByEvalRunIdAndStatus(UUID evalRunId, String status);
 }
