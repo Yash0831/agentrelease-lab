@@ -27,3 +27,13 @@
    is dated and configurable; actual provider billing may differ.
 10. **No PII.** Do not load real user data, real tickets, or real credentials
     into the lab.
+11. **Docker Compose runtime not verified here.** The compose files were
+    reviewed (YAML parses, COPY sources exist, healthchecks wired) but never
+    executed in this sandbox — no Docker daemon is available. The stack is
+    documented to run; the runtime claim is unverified.
+12. **Live-model path not verified here.** Native tool calling is implemented
+    and unit-tested, but no `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` was
+    available in this environment, so the live path never ran against a real
+    model here. Live results, if ever produced, are kept separate from
+    fixture results — a probabilistic model is never required to reproduce
+    scripted fixture verdicts.
