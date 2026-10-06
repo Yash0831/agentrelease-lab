@@ -41,6 +41,18 @@ jobs:
 
   worker:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # Redis-dependent tests fail loudly instead of skipping when this is
+      # set, so a broken Redis service can never silently pass the suite.
+      ARL_REQUIRE_REDIS: "true"
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,6 +60,24 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: agent-worker/requirements.txt
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/localhost/6379) >/dev/null 2>&1; then
+              echo "redis reachable"; break
+            fi
+            sleep 1
+          done
+          python3 - <<'EOF'
+          import socket, sys
+          try:
+              s = socket.create_connection(("localhost", 6379), timeout=5)
+              s.close()
+              print("redis readiness check passed")
+          except OSError as e:
+              print(f"redis readiness check FAILED: {e}")
+              sys.exit(1)
+          EOF
       - name: Test worker
         working-directory: agent-worker
         run: |

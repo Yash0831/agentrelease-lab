@@ -1,10 +1,31 @@
 """Queue tests: job id determinism and idempotent enqueue without Redis."""
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app import queue
+
+# When set (e.g. in CI), Redis-dependent tests fail loudly instead of
+# skipping, so a broken Redis service can never silently pass the suite.
+REQUIRE_REDIS = os.environ.get("ARL_REQUIRE_REDIS", "").lower() in ("1", "true", "yes")
+
+
+def _redis_or_skip():
+    import redis as redis_lib
+    try:
+        c = redis_lib.Redis.from_url(
+            os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+            socket_connect_timeout=2)
+        c.ping()
+        return c
+    except Exception as e:
+        if REQUIRE_REDIS:
+            pytest.fail(f"ARL_REQUIRE_REDIS is set but Redis is unavailable: {e}")
+        pytest.skip("redis not available")
 
 
 def test_job_id_is_deterministic():
@@ -28,13 +49,7 @@ def test_enqueue_without_redis_reports_unavailable():
 
 
 def test_enqueue_idempotent_with_redis():
-    import redis as redis_lib
-    try:
-        c = redis_lib.Redis.from_url("redis://localhost:6379/0", socket_connect_timeout=2)
-        c.ping()
-    except Exception:
-        import pytest
-        pytest.skip("redis not available")
+    c = _redis_or_skip()
     payload = {"versions": ["baseline"], "trials": 1, "test": True}
     jid1, ok1 = queue.enqueue(payload)
     assert ok1 is True
@@ -45,17 +60,6 @@ def test_enqueue_idempotent_with_redis():
     assert c.llen(queue.QUEUE_KEY) >= 0
     c.hdel(queue.RESULT_HASH, jid1)
     c.hdel(queue.JOB_HASH, jid1)
-
-
-def _redis_or_skip():
-    import redis as redis_lib
-    import pytest
-    try:
-        c = redis_lib.Redis.from_url("redis://localhost:6379/0", socket_connect_timeout=2)
-        c.ping()
-        return c
-    except Exception:
-        pytest.skip("redis not available")
 
 
 def test_atomic_enqueue_dedup():
