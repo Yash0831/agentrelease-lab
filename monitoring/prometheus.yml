@@ -1,0 +1,40 @@
+# Prometheus scrape configuration for AgentRelease Lab (pilot deployment).
+#
+# Enabled via the `monitoring` profile in docker-compose.deploy.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml \
+#       --env-file .env.deploy --profile monitoring up -d
+#
+# INTEGRATION NOTE: the platform and worker do not export metrics yet. Wire
+# these scrape jobs to the metrics endpoints once the services expose them:
+#   - platform: Spring Boot Actuator Prometheus endpoint
+#     (e.g. /actuator/prometheus; requires the actuator dependency and the
+#     prometheus registry on the platform classpath). The platform auth
+#     filter already bypasses /actuator paths.
+#   - worker: Prometheus-format metrics at /metrics, including the arl_*
+#     series referenced by monitoring/alerts.yml (queue depth, abandoned
+#     jobs, provider failures, token usage, estimated cost).
+# Until those endpoints exist, the corresponding targets report down and the
+# PlatformDown/WorkerDown alerts fire — that is the honest signal that
+# monitoring is not yet wired, not a configuration error.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: agentrelease-platform
+    static_configs:
+      - targets: ["platform:8080"]
+    metrics_path: /actuator/prometheus
+
+  - job_name: agentrelease-worker
+    static_configs:
+      - targets: ["worker:8001"]
+    metrics_path: /metrics
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,0 +1,113 @@
+# AgentRelease Lab — deployment overlay for a controlled pilot.
+#
+# This file is layered on top of docker-compose.yml and changes the posture
+# from local development to a locked-down deployment:
+#   - postgres and redis are NOT published to the host (private compose
+#     networking only; reach them via the platform/worker services);
+#   - platform and worker bind to 127.0.0.1 (TLS terminates at the reverse
+#     proxy in front of them — see docs/DEPLOYMENT.md);
+#   - deployment mode is enabled (ARL_MODE=deployment): synthetic demo
+#     credentials and fixture-reset endpoints are disabled by the services;
+#   - OIDC identity is configured (ARL_OIDC_*; enforced by the platform and
+#     worker — see docs/DEPLOYMENT.md);
+#   - containers get no-new-privileges and read-only root filesystems where
+#     feasible.
+#
+# Usage:
+#   cp .env.example .env.deploy   # then fill in real secrets (never commit)
+#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml \
+#       --env-file .env.deploy up --build -d
+# With monitoring:
+#   docker compose -f docker-compose.yml -f docker-compose.deploy.yml \
+#       --env-file .env.deploy --profile monitoring up --build -d
+#
+# Secrets: prefer generating .env.deploy from your secret manager at deploy
+# time (pattern documented in docs/DEPLOYMENT.md). As an alternative,
+# Docker secrets (file-based) can be mounted at /run/secrets and referenced
+# by the services. Do not commit .env.deploy.
+#
+# Status: config-reviewed only. This overlay has not been executed here (no
+# Docker daemon in this environment); validate it in the pilot environment
+# before company use.
+
+services:
+  postgres:
+    # Private networking: no published ports.
+    ports: []
+    security_opt:
+      - no-new-privileges:true
+    # The named volume pgdata persists data. For the pilot, either keep the
+    # volume (with scripts/backup.sh) or point the platform at a managed
+    # PostgreSQL and remove this service (see docs/DEPLOYMENT.md).
+
+  redis:
+    # Private networking: no published ports.
+    ports: []
+    security_opt:
+      - no-new-privileges:true
+    # Durability: AOF is enabled (--appendonly yes) so queued jobs survive a
+    # container restart. Job-recovery behavior is documented in
+    # docs/OPERATIONS.md.
+
+  platform:
+    ports:
+      - "127.0.0.1:${PLATFORM_PORT:-8080}:8080"
+    env_file:
+      - path: ${ARL_SECRETS_ENV_FILE:-.env.deploy}
+        required: false
+    environment:
+      ARL_MODE: deployment
+      ARL_OIDC_ENABLED: ${ARL_OIDC_ENABLED:-true}
+      ARL_OIDC_ISSUER: ${ARL_OIDC_ISSUER:?deployment requires ARL_OIDC_ISSUER}
+      ARL_OIDC_AUDIENCE: ${ARL_OIDC_AUDIENCE:?deployment requires ARL_OIDC_AUDIENCE}
+      ARL_OIDC_JWKS_URI: ${ARL_OIDC_JWKS_URI:?deployment requires ARL_OIDC_JWKS_URI}
+      ARL_CORS_ALLOWED_ORIGINS: ${ARL_CORS_ALLOWED_ORIGINS:?deployment requires ARL_CORS_ALLOWED_ORIGINS}
+      SEED_ADMIN_API_KEY: ${SEED_ADMIN_API_KEY:?deployment requires SEED_ADMIN_API_KEY}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?deployment requires POSTGRES_PASSWORD}
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  worker:
+    ports:
+      - "127.0.0.1:${WORKER_PORT:-8001}:8001"
+    env_file:
+      - path: ${ARL_SECRETS_ENV_FILE:-.env.deploy}
+        required: false
+    environment:
+      ARL_MODE: deployment
+      ARL_OIDC_ENABLED: ${ARL_OIDC_ENABLED:-true}
+      ARL_OIDC_ISSUER: ${ARL_OIDC_ISSUER:?deployment requires ARL_OIDC_ISSUER}
+      ARL_OIDC_AUDIENCE: ${ARL_OIDC_AUDIENCE:?deployment requires ARL_OIDC_AUDIENCE}
+      ARL_OIDC_JWKS_URI: ${ARL_OIDC_JWKS_URI:?deployment requires ARL_OIDC_JWKS_URI}
+      WORKER_API_KEY: ${WORKER_API_KEY:?deployment requires WORKER_API_KEY}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["monitoring"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.listen-address=127.0.0.1:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - platform
+      - worker
+
+volumes:
+  promdata:

@@ -152,3 +152,26 @@ See `docs/LIMITATIONS.md`. Headline items: fixture embeddings are hash-based
 (labeled); live-LLM path never ran against a real model here; dashboard demo data
 is synthetic (labeled DEMO); no real customer data anywhere; latency numbers
 reflect a local sandbox, not production.
+
+## Pilot-readiness increments (2026-10-13)
+
+Implemented below; verification pending central run. Nothing in this section
+was executed in this sandbox (no Docker daemon, no live provider
+credentials). Items owned by other agents (live-provider smoke test, OIDC
+enforcement in platform/worker, service metrics endpoints) are named but
+not claimed.
+
+| # | Increment | Status | Notes |
+|---|-----------|--------|-------|
+| S1 | Docker end-to-end script + CI job | IMPLEMENTED, PENDING CI RUN | `scripts/docker_e2e.sh`: builds the stack from a checkout, verifies Flyway migrations, Redis, datasets/runbooks via API, price table in the worker image, service health, then runs the fixture matrix twice on one DB — asserting distinct batch ids, 6/6 assertions and expected verdicts per run, and API retrieval of both batches' decisions, eval runs, and evidence bundles. New `docker-e2e` CI job (existing 4 jobs unchanged). |
+| S4 | Deployment topology | IMPLEMENTED, NOT RUNTIME-VERIFIED | `docker-compose.deploy.yml` overlay: postgres/redis publish no ports, platform/worker bind 127.0.0.1, no-new-privileges, read-only roots with tmpfs, secrets via env file (required vars fail fast when unset), deployment env contract `ARL_MODE`/`ARL_OIDC_ENABLED`/`ARL_OIDC_ISSUER`/`ARL_OIDC_AUDIENCE`/`ARL_OIDC_JWKS_URI`. `docs/DEPLOYMENT.md`: topology diagram, TLS at reverse proxy, private DB/Redis, secret-manager injection pattern, file-secret alternative, rotation procedure, CORS. `.env.example` extended with placeholder-only deployment vars. |
+| S5 | Monitoring and operations | IMPLEMENTED, WIRING PENDING | `monitoring/prometheus.yml` + `monitoring/alerts.yml` (error rate, latency, queue depth, abandoned jobs, retries, provider failures, cost budget) with a `monitoring` Compose profile; `docs/OPERATIONS.md` documents each alert's meaning and first response, Redis AOF durability + job-recovery behavior, backup/restore ops, and log redaction rules. Scrape jobs name the platform/worker metrics endpoints as explicit integration points — until the services export them, up==0 alerts are the honest "not wired" signal. |
+| S6 | Load test | IMPLEMENTED, NOT RUN | `load/load_test.py` (stdlib only): API reads + fixture-mode eval submissions, `--concurrency`/`--requests`/`--base-url`, JSON output with throughput, p50/p95/p99, errors, environment block. Header + docs label it `PROPOSED PILOT TARGET — not a measured production capacity claim`. `load/results-template.json` holds the schema with placeholder measurements only. |
+| S7 | Backup and restore | IMPLEMENTED, DRILL PENDING | `scripts/backup.sh` (pg_dump custom format + reports/recordings/config, SHA-256 manifest) and `scripts/restore.sh` (named target DB, refuses source overwrite without `--force`, prints tenant/version/batch/run/trace/approval/decision counts). Restore drill into a clean environment with measured RTO/RPO is pilot work (`docs/PILOT.md`). |
+| S8 | Pilot program docs | IMPLEMENTED | `docs/PILOT.md`: setup, onboarding, operating instructions, support, rollback, backup drill, and a 12-item acceptance checklist split into verified-by-automated-evidence vs requires-actual-pilot. States plainly that synthetic testing is not a completed pilot. |
+
+Blocked / not owned here: live-provider smoke test (no `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY`;
+never print or commit credentials); OIDC/OAuth enforcement in platform and worker
+(contract variable names defined in `docs/DEPLOYMENT.md` for those workstreams);
+service metrics endpoints for Prometheus (integration points documented in
+`monitoring/prometheus.yml`).

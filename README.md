@@ -103,9 +103,28 @@ dashboard/       React 18 + TypeScript (Vite)
 eval/            datasets with provenance + expected outcomes, price table,
                  failure-injection scenario docs
 benchmarks/      run_eval.py driver + generated reports from actual runs
-docs/            ARCHITECTURE, THREAT_MODEL, LIMITATIONS, API, ADRs
+docs/            ARCHITECTURE, THREAT_MODEL, LIMITATIONS, API, ADRs,
+                 DEPLOYMENT (pilot topology), OPERATIONS (runbook), PILOT
+scripts/         demo.sh, docker_e2e.sh (Docker end-to-end verification),
+                 backup.sh / restore.sh (evidence backup and restore)
+monitoring/      Prometheus scrape config + alert rules for the pilot
+load/            load_test.py (stdlib-only pilot workload) + results template
 screenshots/     captured from the running application
 ```
+
+## Verifying the stack
+
+From a fresh checkout (requires a Docker daemon; the `docker-e2e` CI job
+runs this on every push):
+
+```bash
+bash scripts/docker_e2e.sh        # build, verify, run fixture eval twice
+bash scripts/docker_e2e.sh --down # same, then tear the stack down
+```
+
+The script checks migrations, datasets, price table, service health, then
+runs the fixture evaluation matrix twice against one database and asserts
+batch separation and evidence retrieval. Any failed check exits non-zero.
 
 ## Scope and limitations
 
@@ -125,8 +144,14 @@ screenshots/     captured from the running application
 Public repository: https://github.com/Yash0831/agentrelease-lab
 
 GitHub Actions runs the full pipeline on every push: platform tests, worker
-tests, dashboard build, and the fixture-mode evaluation matrix (the
-release-decision job). CI is green on `main`.
+tests, dashboard build, the fixture-mode evaluation matrix (the
+release-decision job), and the Docker end-to-end verification (the
+docker-e2e job: full stack from a fresh checkout, fixture eval run twice,
+batch separation and evidence retrieval asserted). CI is green on `main`.
+
+A controlled pilot is a separate, documented program — not a CI result:
+see `docs/PILOT.md` (setup, acceptance checklist), `docs/DEPLOYMENT.md`
+(topology, secrets, OIDC), and `docs/OPERATIONS.md` (alerts, backup/restore).
 
 ## License
 

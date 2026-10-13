@@ -1,0 +1,115 @@
+# Alert rules for the AgentRelease Lab pilot deployment.
+# Each alert names its meaning and first response in docs/OPERATIONS.md
+# ("Alerts" section); annotations link there.
+#
+# Metric-name contract (worker /metrics, see monitoring/prometheus.yml):
+#   arl_queue_depth                  gauge: jobs waiting in the Redis queue
+#   arl_jobs_abandoned_total         counter: jobs reclaimed after lease expiry
+#   arl_job_retries_total            counter: job retry attempts
+#   arl_provider_failures_total      counter: failed live-provider calls
+#   arl_llm_tokens_total             counter: tokens consumed (live + fixture)
+#   arl_estimated_cost_usd_total     counter: estimated spend, USD
+# Platform (Spring Boot Actuator) uses the standard http_server_requests_*
+# series. Until the services export these, the rules evaluate against absent
+# series and the up==0 alerts fire — the honest "not wired" signal.
+
+groups:
+  - name: agentrelease-lab
+    rules:
+      - alert: PlatformDown
+        expr: up{job="agentrelease-platform"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Platform API has been unreachable for 2 minutes"
+          description: "Prometheus cannot scrape the platform metrics endpoint. The API, tool gateway, and dashboard data are affected."
+          runbook: "docs/OPERATIONS.md#platformdown"
+
+      - alert: WorkerDown
+        expr: up{job="agentrelease-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent worker has been unreachable for 2 minutes"
+          description: "No evaluation jobs are being processed. Queued jobs wait in Redis until the worker returns."
+          runbook: "docs/OPERATIONS.md#workerdown"
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="agentrelease-platform",status=~"5.."}[5m]))
+            / sum(rate(http_server_requests_seconds_count{job="agentrelease-platform"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Platform 5xx rate above 5% for 5 minutes"
+          description: "More than 1 in 20 platform requests are failing server-side. Check platform logs for the error envelope codes."
+          runbook: "docs/OPERATIONS.md#higherrorrate"
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_server_requests_seconds_bucket{job="agentrelease-platform"}[5m])) by (le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Platform p95 latency above 2s for 5 minutes"
+          description: "95th-percentile request latency exceeds 2 seconds. Check DB/Redis latency and queue depth."
+          runbook: "docs/OPERATIONS.md#highlatency"
+
+      - alert: QueueDepthHigh
+        expr: arl_queue_depth > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Evaluation queue depth above 100 for 5 minutes"
+          description: "Jobs are arriving faster than the worker processes them. Check worker health, then consider pausing new submissions."
+          runbook: "docs/OPERATIONS.md#queuedepthhigh"
+
+      - alert: AbandonedJobs
+        expr: increase(arl_jobs_abandoned_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jobs were abandoned and reclaimed in the last 15 minutes"
+          description: "Worker leases expired (crash or stall) and jobs were re-queued. Check worker logs around the abandonment window."
+          runbook: "docs/OPERATIONS.md#abandonedjobs"
+
+      - alert: HighRetryRate
+        expr: increase(arl_job_retries_total[15m]) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 20 job retries in 15 minutes"
+          description: "Repeated transient failures (provider, DB, or Redis). Investigate before the retry budget masks a systemic fault."
+          runbook: "docs/OPERATIONS.md#highretryrate"
+
+      - alert: ProviderFailures
+        expr: increase(arl_provider_failures_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5 live-provider failures in 15 minutes"
+          description: "The configured model provider is erroring or rate-limiting. Fixture-mode evaluations are unaffected; live runs degrade."
+          runbook: "docs/OPERATIONS.md#providerfailures"
+
+      - alert: CostBudgetExceeded
+        # Pilot budget placeholder: set to the agreed pilot budget before the
+        # pilot. Estimated cost comes from eval/price-table.json and is an
+        # estimate, not provider billing (see docs/LIMITATIONS.md).
+        expr: increase(arl_estimated_cost_usd_total[1h]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Estimated evaluation spend above $10 in the last hour"
+          description: "Token/cost budget is being consumed faster than planned. Reduce live-mode concurrency or pause live evaluations."
+          runbook: "docs/OPERATIONS.md#costbudgetexceeded"

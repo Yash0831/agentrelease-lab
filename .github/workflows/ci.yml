@@ -159,3 +159,25 @@ jobs:
         with:
           name: eval-report
           path: benchmarks/reports/eval-report-*.json
+
+  docker-e2e:
+    # Builds the full stack from this checkout and verifies migrations,
+    # datasets, price table, service health, and two fixture evaluation runs
+    # against one database (batch separation + evidence retrieval).
+    # Fix failures here by fixing the stack, not by weakening the script:
+    # scripts/docker_e2e.sh fails loudly on any failed check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Docker end-to-end verification
+        run: bash scripts/docker_e2e.sh --down
+      - name: Upload e2e reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-e2e-reports
+          path: /tmp/arl-docker-e2e
