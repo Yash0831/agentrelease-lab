@@ -1,9 +1,13 @@
 package com.agentreleaselab.security;
 
+import com.agentreleaselab.domain.AppUser;
 import com.agentreleaselab.domain.Tenant;
 import com.agentreleaselab.domain.TenantRepository;
+import com.agentreleaselab.domain.UserRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
@@ -36,14 +40,18 @@ public class OidcAuthService {
 
     private final OidcTokenValidator validator;
     private final TenantRepository tenants;
+    private final UserRepository users;
     private final OidcProperties props;
 
-    public OidcAuthService(OidcTokenValidator validator, TenantRepository tenants, OidcProperties props) {
+    public OidcAuthService(OidcTokenValidator validator, TenantRepository tenants,
+                           UserRepository users, OidcProperties props) {
         this.validator = validator;
         this.tenants = tenants;
+        this.users = users;
         this.props = props;
     }
 
+    @Transactional
     public TenantContext authenticate(String token) {
         Map<String, Object> claims;
         try {
@@ -70,11 +78,30 @@ public class OidcAuthService {
         }
         Set<String> scopes = parseScopes(firstPresent(
                 claims.get(props.scopeClaim()), claims.get("scp")));
-        // OIDC subjects have no AppUser row; derive a stable UUID so audit
-        // fields (requesterId etc.) stay well-formed and tenant-scoped.
-        UUID userId = UUID.nameUUIDFromBytes(
-                ("oidc:" + props.issuer() + ":" + sub).getBytes(StandardCharsets.UTF_8));
-        return new TenantContext(tenant.getId(), userId, sub, role, tenant.getSlug(), scopes, "oidc");
+        // Just-in-time provisioning: audit fields (approvals.approver_id,
+        // approvals.requester_id, access_grants.granted_by) are foreign keys
+        // to app_users, so an OIDC subject needs a real row before it can
+        // approve or execute. The row's api_key_hash is a hashed sentinel
+        // that is never issued as a credential, so the provisioned user can
+        // only ever sign in via OIDC. The token's role stays authoritative
+        // for this request; the stored role is the provisioning-time role.
+        final String tokenRole = role;
+        AppUser user = users.findByTenantIdAndUsername(tenant.getId(), sub)
+                .orElseGet(() -> provision(tenant.getId(), sub, tokenRole));
+        return new TenantContext(tenant.getId(), user.getId(), sub, role, tenant.getSlug(), scopes, "oidc");
+    }
+
+    private AppUser provision(UUID tenantId, String sub, String role) {
+        String sentinelHash = AuthService.sha256(
+                "oidc-provisioned:" + props.issuer() + ":" + tenantId + ":" + sub);
+        try {
+            return users.saveAndFlush(new AppUser(tenantId, sub, sub, sentinelHash, role, null));
+        } catch (DataIntegrityViolationException e) {
+            // Concurrent first sign-in for the same subject: use the winner's row.
+            return users.findByTenantIdAndUsername(tenantId, sub)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.UNAUTHORIZED, "OIDC_PROVISIONING_FAILED"));
+        }
     }
 
     private static String str(Object o) {

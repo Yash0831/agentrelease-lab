@@ -100,6 +100,14 @@ pilot dataset, in the pilot environment, by the pilot participants.
    proposed RPO 24 hours are **targets**, not results — the drill produces
    the observed numbers.
 
+Observed drill (2026-10-13, sandbox, local processes not containers):
+backup of the live database (2 tenants, 4 agent versions, 220 eval runs,
+2,284 trace events, 1 approval, 6 release decisions) restored into a
+separate database on the same host; verification counts identical to the
+source and zero committed data lost; restore step completed in ~1 second
+at this dataset size. These are observations at sandbox scale, not the
+proposed targets above and not a substitute for the pilot-host drill.
+
 ## 7. Acceptance checklist
 
 Two columns: what automated evidence already demonstrates, and what only

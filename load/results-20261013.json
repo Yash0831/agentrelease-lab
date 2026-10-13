@@ -1,0 +1,63 @@
+{
+  "generated_at": "2026-10-13T20:20:29.410853+00:00",
+  "workload": {
+    "label": "PROPOSED PILOT TARGET \u2014 not a measured production capacity claim",
+    "description": "API reads + fixture-mode eval submissions (create run, ingest trace events, finish run), all mode=fixture",
+    "base_url": "http://localhost:8080",
+    "concurrency": 8,
+    "api_read_requests": 200,
+    "eval_submissions": 10,
+    "batch_id": "load-test-20261013-202027"
+  },
+  "results": {
+    "elapsed_seconds": 1.39,
+    "throughput_rps": 150.82,
+    "api_reads": {
+      "name": "api_reads",
+      "requests": 200,
+      "ok": 200,
+      "errors": 0,
+      "error_kinds": {},
+      "status_codes": {
+        "200": 200
+      },
+      "latency_ms": {
+        "p50": 32.45,
+        "p95": 83.91,
+        "p99": 110.49,
+        "max": 118.25,
+        "mean": 38.43
+      }
+    },
+    "eval_submissions": {
+      "name": "eval_submissions",
+      "requests": 10,
+      "ok": 10,
+      "errors": 0,
+      "error_kinds": {},
+      "status_codes": {
+        "200": 10
+      },
+      "latency_ms": {
+        "p50": 302.24,
+        "p95": 322.72,
+        "p99": 325.29,
+        "max": 325.94,
+        "mean": 265.98
+      }
+    }
+  },
+  "environment": {
+    "python": "3.12.3",
+    "os": "Linux 7.0.0-39-generic",
+    "machine": "x86_64",
+    "cpu_count": 2,
+    "target": "http://localhost:8080"
+  },
+  "notes": [
+    "PROPOSED PILOT TARGET \u2014 not a measured production capacity claim. Numbers describe this run only.",
+    "Queue/backpressure behavior is enforced by the services (bounded worker queue, atomic enqueue dedup, processing leases, abandoned-job recovery); this script bounds itself with --concurrency and applies backpressure by limiting in-flight requests.",
+    "Load-test eval runs are mode=fixture and tagged with the batch_id above; delete that batch afterwards on a shared database.",
+    "Recovery-after-overload and sustained resource usage are not measured here; run repeated passes and watch monitoring/alerts.yml signals for those."
+  ]
+}

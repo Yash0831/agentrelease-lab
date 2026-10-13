@@ -34,7 +34,16 @@ if [ "$TARGET_DB" = "$SOURCE_DB" ] && [ "$FORCE" = "0" ]; then
   fail "target database '${TARGET_DB}' equals the backup source; refusing without --force"
 fi
 
-psqlc() { docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$1" -tA -c "$2"; }
+# Connection: Compose postgres container by default; with
+# ARL_RESTORE_VIA_URL=1, local psql/pg_restore against PG_HOST/PG_PORT
+# (for non-Docker environments, mirroring backup.sh's ARL_BACKUP_VIA_URL).
+PG_HOST="${PG_HOST:-localhost}"
+PG_PORT="${PG_PORT:-5432}"
+if [ "${ARL_RESTORE_VIA_URL:-0}" = "1" ]; then
+  psqlc() { psql "postgresql://${POSTGRES_USER}@${PG_HOST}:${PG_PORT}/$1" -tA -c "$2"; }
+else
+  psqlc() { docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$1" -tA -c "$2"; }
+fi
 
 echo "== 1/4 verify backup integrity =="
 cd "$BACKUP_DIR" && sha256sum -c SHA256SUMS --quiet || fail "backup checksum verification failed"
@@ -53,9 +62,15 @@ psqlc "$TARGET_DB" "CREATE EXTENSION IF NOT EXISTS vector;" >/dev/null \
   || fail "could not enable vector extension on target"
 
 echo "== 3/4 restore =="
-docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$TARGET_DB" \
-  --clean --if-exists < "$BACKUP_DIR/db.dump" \
-  || fail "pg_restore failed"
+if [ "${ARL_RESTORE_VIA_URL:-0}" = "1" ]; then
+  pg_restore -d "postgresql://${POSTGRES_USER}@${PG_HOST}:${PG_PORT}/${TARGET_DB}" \
+    --clean --if-exists "$BACKUP_DIR/db.dump" \
+    || fail "pg_restore failed"
+else
+  docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" -d "$TARGET_DB" \
+    --clean --if-exists < "$BACKUP_DIR/db.dump" \
+    || fail "pg_restore failed"
+fi
 pass "database restored into ${TARGET_DB}"
 
 echo "== 4/4 verification counts (compare with backup source) =="

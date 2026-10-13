@@ -73,7 +73,8 @@ class OidcAuthTest {
     @Autowired ApprovalRepository approvalRepository;
 
     @BeforeAll
-    static void startIdp() throws Exception {
+    static synchronized void startIdp() throws Exception {
+        if (jwksServer != null) return;
         KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
         gen.initialize(2048);
         keyPair = gen.generateKeyPair();
@@ -89,7 +90,10 @@ class OidcAuthTest {
         jwk.put("e", b64url(stripLeadingZero(pub.getPublicExponent().toByteArray())));
         String body = MAPPER.writeValueAsString(Map.of("keys", List.of(jwk)));
 
-        jwksServer = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        // Bind the wildcard address and address it via [::1]: in the dev
+        // sandbox, JVM HTTP to 127.0.0.1 is intercepted by an egress proxy,
+        // while IPv6 loopback is direct (same quirk as the JDBC URL).
+        jwksServer = HttpServer.create(new InetSocketAddress(0), 0);
         jwksServer.createContext("/jwks.json", ex -> {
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             ex.getResponseHeaders().add("Content-Type", "application/json");
@@ -107,11 +111,15 @@ class OidcAuthTest {
     }
 
     @DynamicPropertySource
-    static void oidcProps(DynamicPropertyRegistry r) {
+    static void oidcProps(DynamicPropertyRegistry r) throws Exception {
+        // DynamicPropertySource runs before @BeforeAll, so the stub IdP must
+        // be started here — otherwise jwksPort is still 0 and every JWKS
+        // fetch fails (all valid tokens rejected with 401).
+        startIdp();
         r.add("arl.oidc.enabled", () -> "true");
         r.add("arl.oidc.issuer", () -> ISSUER);
         r.add("arl.oidc.audience", () -> AUDIENCE);
-        r.add("arl.oidc.jwks-uri", () -> "http://localhost:" + jwksPort + "/jwks.json");
+        r.add("arl.oidc.jwks-uri", () -> "http://[::1]:" + jwksPort + "/jwks.json");
     }
 
     @AfterEach
