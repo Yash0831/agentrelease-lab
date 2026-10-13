@@ -22,8 +22,19 @@ spring:
     locations: classpath:db/migration
 
 arl:
+  # local | deployment. Deployment mode fails startup unless OIDC is enabled,
+  # demo seeding is off, the seed admin key is rotated, and CORS is explicit.
+  mode: ${ARL_MODE:local}
   seed-enabled: ${SEED_ENABLED:true}
   seed-admin-api-key: ${SEED_ADMIN_API_KEY:arl-admin-demo-key}
+  oidc:
+    enabled: ${ARL_OIDC_ENABLED:false}
+    issuer: ${ARL_OIDC_ISSUER:}
+    audience: ${ARL_OIDC_AUDIENCE:}
+    jwks-uri: ${ARL_OIDC_JWKS_URI:}
+    tenant-claim: ${ARL_OIDC_TENANT_CLAIM:tenant_slug}
+    role-claim: ${ARL_OIDC_ROLE_CLAIM:role}
+    scope-claim: ${ARL_OIDC_SCOPE_CLAIM:scope}
   # Tool gateway limits
   gateway:
     default-timeout-ms: 5000

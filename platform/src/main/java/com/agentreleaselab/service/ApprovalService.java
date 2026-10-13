@@ -5,6 +5,7 @@ import com.agentreleaselab.domain.ApprovalRepository;
 import com.agentreleaselab.domain.AccessGrantRepository;
 import com.agentreleaselab.domain.AccessGrant;
 import com.agentreleaselab.domain.Approval;
+import com.agentreleaselab.security.OidcAuthService;
 import com.agentreleaselab.security.TenantContext;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Lock;
@@ -62,7 +63,7 @@ public class ApprovalService {
     @Transactional
     public Approval approve(TenantContext ctx, UUID approvalId) {
         Approval a = loadForUpdateForTenant(ctx, approvalId);
-        if (!ctx.hasAnyRole("APPROVER", "ADMIN")) {
+        if (!ctx.hasScopeOrRole(OidcAuthService.SCOPE_APPROVE, "APPROVER", "ADMIN")) {
             throw ApiException.forbidden("APPROVAL_APPROVE_DENIED", "Role may not approve access changes");
         }
         if (!a.getStatus().equals("PENDING")) {
@@ -85,7 +86,7 @@ public class ApprovalService {
     @Transactional
     public Approval reject(TenantContext ctx, UUID approvalId) {
         Approval a = loadForUpdateForTenant(ctx, approvalId);
-        if (!ctx.hasAnyRole("APPROVER", "ADMIN")) {
+        if (!ctx.hasScopeOrRole(OidcAuthService.SCOPE_APPROVE, "APPROVER", "ADMIN")) {
             throw ApiException.forbidden("APPROVAL_REJECT_DENIED", "Role may not reject access changes");
         }
         if (!a.getStatus().equals("PENDING")) {

@@ -10,6 +10,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
+import java.util.Set;
 
 /** API-key authentication. Keys are stored as SHA-256 hashes; the raw key
  *  only exists in the seeder, tests, and the operator's .env. */
@@ -31,7 +32,8 @@ public class AuthService {
         AppUser user = users.findByApiKeyHash(sha256(apiKey))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid API key"));
         String slug = tenants.findById(user.getTenantId()).map(t -> t.getSlug()).orElse("?");
-        return new TenantContext(user.getTenantId(), user.getId(), user.getUsername(), user.getRole(), slug);
+        return new TenantContext(user.getTenantId(), user.getId(), user.getUsername(),
+                user.getRole(), slug, Set.of(), "api-key");
     }
 
     public static String sha256(String input) {

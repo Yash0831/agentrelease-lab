@@ -1,6 +1,8 @@
 package com.agentreleaselab.api;
 
 import com.agentreleaselab.domain.ReleasePolicyRepository;
+import com.agentreleaselab.security.Authorization;
+import com.agentreleaselab.security.OidcAuthService;
 import com.agentreleaselab.service.DatasetService;
 import com.agentreleaselab.service.ReleaseDecisionService;
 import com.agentreleaselab.domain.ReleaseDecision;
@@ -49,6 +51,12 @@ public class ReleaseApiController {
 
     @PostMapping("/api/release-policies")
     public Map<String, Object> createPolicy(@RequestBody CreatePolicy body) {
+        // Release policy writes are privileged: arl:admin scope, or the
+        // ADMIN role, or the AGENT service identity (the benchmark harness
+        // registers its policies with the agent demo key).
+        Authorization.requireScopeOrRole(TenantContext.get(), OidcAuthService.SCOPE_ADMIN,
+                "POLICY_WRITE_DENIED", "Release policy writes require scope arl:admin or an admin/agent role",
+                "ADMIN", "AGENT");
         UUID tenantId = TenantContext.get().tenantId();
         var existing = policies.findByTenantIdAndName(tenantId, body.name());
         if (existing.isPresent()) {

@@ -1,6 +1,8 @@
 package com.agentreleaselab.api;
 
 import com.agentreleaselab.domain.Approval;
+import com.agentreleaselab.security.Authorization;
+import com.agentreleaselab.security.OidcAuthService;
 import com.agentreleaselab.security.TenantContext;
 import com.agentreleaselab.service.ApprovalService;
 import org.springframework.web.bind.annotation.*;
@@ -37,6 +39,11 @@ public class ApprovalController {
 
     @PostMapping("/{id}/execute")
     public Map<String, Object> execute(@PathVariable UUID id) {
+        // Executing an approved action is privileged: it performs the side
+        // effect. Requires the arl:approve scope or APPROVER/ADMIN role.
+        Authorization.requireScopeOrRole(TenantContext.get(), OidcAuthService.SCOPE_APPROVE,
+                "APPROVAL_EXECUTE_DENIED", "Approval execution requires scope arl:approve or approver/admin role",
+                "APPROVER", "ADMIN");
         var grant = approvals.execute(TenantContext.get(), id);
         return Map.of("executed", true, "targetUsername", grant.getTargetUsername(),
                 "resource", grant.getResource(), "approvalId", id.toString());
