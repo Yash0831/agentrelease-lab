@@ -4,6 +4,9 @@ Fixture mode is labeled `mode: fixture` at every layer (ADR-0004).
 """
 from __future__ import annotations
 
+import logging
+import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +15,9 @@ import httpx
 import yaml
 
 from .config import settings
+from .metrics import estimate_cost_usd, load_price_table, telemetry
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimitError(Exception):
@@ -94,6 +100,10 @@ class LiveLLM(LLMProvider):
     model's `tool_calls` are parsed natively. Providers that do not support
     native tool calling fall back to the documented ```tool_call JSON-block
     convention (the system prompt describes it).
+
+    Simultaneous provider calls from this process are bounded by
+    `llm_max_concurrency` via a process-wide semaphore; the API key is
+    never logged.
     """
 
     def __init__(self, base_url: str | None = None, api_key: str | None = None,
@@ -125,14 +135,33 @@ class LiveLLM(LLMProvider):
             "tools": NATIVE_TOOL_DEFINITIONS,
             "tool_choice": "auto",
         }
-        try:
-            r = httpx.post(f"{self.base_url}/chat/completions", json=body,
-                           headers=headers, timeout=self.timeout_s)
-        except httpx.TimeoutException as e:
-            raise TimeoutError(f"LLM request timed out after {self.timeout_s}s") from e
+        # Bounded concurrency: at most llm_max_concurrency provider calls
+        # in flight from this worker process.
+        with _live_semaphore():
+            try:
+                r = httpx.post(f"{self.base_url}/chat/completions", json=body,
+                               headers=headers, timeout=self.timeout_s)
+            except httpx.TimeoutException as e:
+                telemetry.record_failure("timeout")
+                logger.warning("llm_call timeout model=%s scenario=%s step=%d "
+                               "timeout_s=%s", self.model, scenario_id, step,
+                               self.timeout_s)
+                raise TimeoutError(
+                    f"LLM request timed out after {self.timeout_s}s") from e
         if r.status_code == 429:
-            raise RateLimitError(f"provider 429: {r.text[:200]}")
-        r.raise_for_status()
+            telemetry.record_failure("rate_limit")
+            logger.warning("llm_call rate_limited model=%s scenario=%s step=%d",
+                           self.model, scenario_id, step)
+            raise RateLimitError(
+                f"provider 429: {_redact(str(r.text[:200]))}")
+        try:
+            r.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            telemetry.record_failure("http")
+            logger.warning("llm_call http_error model=%s scenario=%s step=%d "
+                           "status=%s", self.model, scenario_id, step,
+                           r.status_code)
+            raise
         data = r.json()
         choice = data["choices"][0]["message"]
         usage = data.get("usage", {})
@@ -149,10 +178,67 @@ class LiveLLM(LLMProvider):
         # A turn that only calls tools has no final answer yet.
         if tool_calls and not final:
             final = None
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        cost = estimate_cost_usd(_price_table(), self.model,
+                                 input_tokens, output_tokens)
+        telemetry.record_call(input_tokens=input_tokens,
+                              output_tokens=output_tokens, cost_usd=cost)
+        logger.info("llm_call ok model=%s scenario=%s step=%d "
+                    "input_tokens=%d output_tokens=%d tool_calls=%d "
+                    "estimated_cost_usd=%s",
+                    self.model, scenario_id, step, input_tokens,
+                    output_tokens, len(tool_calls),
+                    "unknown" if cost is None else round(cost, 6))
         return LLMResponse(tool_calls=tool_calls, final_answer=final,
-                           input_tokens=usage.get("prompt_tokens", 0),
-                           output_tokens=usage.get("completion_tokens", 0),
+                           input_tokens=input_tokens,
+                           output_tokens=output_tokens,
                            provider="live", model=self.model)
+
+
+# --- live-path safety plumbing (module private) ---
+
+_live_semaphore_inst: threading.Semaphore | None = None
+_live_semaphore_size: int | None = None
+_price_table_cache: dict | None = None
+
+
+def _live_semaphore() -> threading.Semaphore:
+    """Process-wide semaphore bounding concurrent live provider calls.
+
+    Rebuilt when the configured bound changes (tests / reloads).
+    """
+    global _live_semaphore_inst, _live_semaphore_size
+    size = max(1, int(settings.llm_max_concurrency or 1))
+    if _live_semaphore_inst is None or _live_semaphore_size != size:
+        _live_semaphore_inst = threading.Semaphore(size)
+        _live_semaphore_size = size
+    return _live_semaphore_inst
+
+
+def _price_table() -> dict:
+    global _price_table_cache
+    if _price_table_cache is None:
+        try:
+            _price_table_cache = load_price_table()
+        except Exception:
+            _price_table_cache = {}
+    return _price_table_cache
+
+
+# Same credential-fragment coverage as replay._sanitize_text (kept local:
+# replay imports from this module, so importing it here would cycle).
+_CRED_FRAGMENT = re.compile(
+    r"(?i)\b\w*(api[_-]?key|apikey|token|password|secret|credential|bearer|"
+    r"authorization)\b\s*[:=]\s*(?:bearer\s+)?[^\s,;\"']+")
+_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[^\s,;\"']+")
+
+
+def _redact(text: str) -> str:
+    """Redact credential fragments from provider-facing text (error bodies,
+    log lines). The configured API key never appears in logs."""
+    text = _CRED_FRAGMENT.sub(lambda m: m.group(1) + "=<redacted>", text)
+    return _BEARER_TOKEN.sub("Bearer=<redacted>", text)
 
 
 # OpenAI function-calling format definitions for the six agent tools.
@@ -272,4 +358,5 @@ def call_with_retries(provider: LLMProvider, *, version_name: str, scenario_id: 
             retries += 1
             if retries > max_retries:
                 raise
+            telemetry.record_retry()
             time.sleep(min(2 ** retries, 8))

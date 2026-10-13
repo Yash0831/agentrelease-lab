@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_timeout_seconds: int = 60
 
+    # Live-provider safety bounds. llm_max_concurrency caps simultaneous
+    # provider calls from this worker process (semaphore in app.llm).
+    llm_max_concurrency: int = 2
+    llm_max_tokens_budget: int | None = None   # total input+output tokens per harness run
+    llm_max_cost_usd: float | None = None      # estimated USD per harness run
+
     embedding_mode: str = "fixture"
     otel_exporter_otlp_endpoint: str = ""
 

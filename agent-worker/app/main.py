@@ -38,7 +38,10 @@ def _check_auth(authorization: str | None):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "arl-worker"}
+    # Operational health: Redis connectivity and pending queue depth.
+    qi = queue.info()
+    return {"status": "ok", "service": "arl-worker",
+            "redis": qi["redis"], "queue_depth": qi["queue_depth"]}
 
 
 @app.post("/jobs")

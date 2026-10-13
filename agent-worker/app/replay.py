@@ -84,10 +84,14 @@ def _sanitize_result(result):
     return result
 
 
-# Credential-looking fragments inside free-text error messages.
+# Credential-looking fragments inside free-text error messages. The optional
+# \w* prefix covers LLM_API_KEY-style names; the optional "bearer" after the
+# separator covers "Authorization: Bearer <token>"; the second pattern
+# covers a bare "Bearer <token>" with no key name at all.
 _CRED_FRAGMENT = re.compile(
-    r"(?i)\b(api[_-]?key|apikey|token|password|secret|credential|bearer|"
-    r"authorization)\b\s*[:=]\s*[^\s,;\"']+")
+    r"(?i)\b\w*(api[_-]?key|apikey|token|password|secret|credential|bearer|"
+    r"authorization)\b\s*[:=]\s*(?:bearer\s+)?[^\s,;\"']+")
+_BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[^\s,;\"']+")
 
 
 def _sanitize_text(text) -> str:
@@ -95,7 +99,8 @@ def _sanitize_text(text) -> str:
     decision-relevant content (e.g. the error code and ticket reference)."""
     if not isinstance(text, str):
         return ""
-    return _CRED_FRAGMENT.sub(lambda m: m.group(1) + "=<redacted>", text)
+    text = _CRED_FRAGMENT.sub(lambda m: m.group(1) + "=<redacted>", text)
+    return _BEARER_TOKEN.sub("Bearer=<redacted>", text)
 
 
 def _validate_evidence_fields(data: dict) -> None:

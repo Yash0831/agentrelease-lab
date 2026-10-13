@@ -142,6 +142,21 @@ def get_result(jid: str) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def info() -> dict:
+    """Operational snapshot for /health: Redis connectivity + queue depth.
+
+    Never raises; reports "down" with a null depth when Redis is
+    unreachable so health stays readable during outages.
+    """
+    c = _client()
+    if c is None:
+        return {"redis": "down", "queue_depth": None}
+    try:
+        return {"redis": "up", "queue_depth": c.llen(QUEUE_KEY)}
+    except Exception:
+        return {"redis": "down", "queue_depth": None}
+
+
 def trial_key(version: str, scenario: str, trial: int) -> str:
     return f"{version}:{scenario}:{trial}"
 

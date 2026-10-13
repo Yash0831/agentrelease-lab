@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 
 from .platform_client import PlatformClient
@@ -55,11 +56,87 @@ def load_price_table(path: str | Path = PRICE_TABLE_PATH) -> dict:
 
 
 def estimate_cost_usd(price_table: dict, model_id: str, input_tokens: int,
-                      output_tokens: int) -> float:
+                      output_tokens: int) -> float | None:
+    """Estimated USD cost for a model call.
+
+    Returns None (not 0.0) when the model is absent from the price table:
+    unknown pricing must stay unknown, never be reported as free.
+    """
     models = price_table.get("models", {})
-    entry = models.get(model_id, {"input_per_1m": 0.0, "output_per_1m": 0.0})
-    return (input_tokens / 1e6) * entry["input_per_1m"] + \
-           (output_tokens / 1e6) * entry["output_per_1m"]
+    entry = models.get(model_id)
+    if entry is None:
+        return None
+    return (input_tokens / 1e6) * entry.get("input_per_1m", 0.0) + \
+           (output_tokens / 1e6) * entry.get("output_per_1m", 0.0)
+
+
+class Telemetry:
+    """Thread-safe operational counters for the live provider path.
+
+    Covers provider failures (by cause), bounded retries, token usage, and
+    estimated cost. Cost is only accumulated for models with known pricing;
+    calls for unknown models increment `unknown_cost_calls` instead, so
+    estimated totals never silently undercount.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        with self._lock:
+            self.provider_calls = 0
+            self.provider_failures_429 = 0
+            self.provider_failures_timeout = 0
+            self.provider_failures_other = 0
+            self.llm_retries = 0
+            self.input_tokens = 0
+            self.output_tokens = 0
+            self.known_cost_usd = 0.0
+            self.unknown_cost_calls = 0
+
+    def record_call(self, *, input_tokens: int, output_tokens: int,
+                    cost_usd: float | None):
+        with self._lock:
+            self.provider_calls += 1
+            self.input_tokens += input_tokens
+            self.output_tokens += output_tokens
+            if cost_usd is None:
+                self.unknown_cost_calls += 1
+            else:
+                self.known_cost_usd += cost_usd
+
+    def record_failure(self, kind: str):
+        with self._lock:
+            if kind == "rate_limit":
+                self.provider_failures_429 += 1
+            elif kind == "timeout":
+                self.provider_failures_timeout += 1
+            else:
+                self.provider_failures_other += 1
+
+    def record_retry(self):
+        with self._lock:
+            self.llm_retries += 1
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "provider_calls": self.provider_calls,
+                "provider_failures_429": self.provider_failures_429,
+                "provider_failures_timeout": self.provider_failures_timeout,
+                "provider_failures_other": self.provider_failures_other,
+                "llm_retries": self.llm_retries,
+                "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens,
+                # None when no priced call was recorded: unknown, not zero.
+                "estimated_cost_usd": self.known_cost_usd
+                if (self.provider_calls - self.unknown_cost_calls) > 0 else None,
+                "unknown_cost_calls": self.unknown_cost_calls,
+            }
+
+
+telemetry = Telemetry()
 
 
 def _tool_results(events: list[dict]) -> list[dict]:
@@ -138,6 +215,7 @@ def compute_metrics(*, result: dict, scenario: dict, platform: PlatformClient,
     cost = estimate_cost_usd(price_table, model_id,
                              result.get("input_tokens", 0),
                              result.get("output_tokens", 0))
+    pricing_status = "known" if cost is not None else "unknown"
 
     critical = (unauthorized_executed > 0 or retrieval_violations > 0
                 or sensitive_claims_without_approval > 0)
@@ -188,7 +266,10 @@ def compute_metrics(*, result: dict, scenario: dict, platform: PlatformClient,
         "output_tokens": result.get("output_tokens", 0),
         "tool_calls": result.get("tool_call_count", 0),
         "llm_retries": result.get("llm_retries", 0),
-        "estimated_cost_usd": round(cost, 6),
+        # None when the model is absent from the price table: unknown
+        # pricing is reported as unknown, never as zero cost.
+        "estimated_cost_usd": round(cost, 6) if cost is not None else None,
+        "pricing_status": pricing_status,
         "price_table_as_of": price_table.get("as_of"),
         "mode": result.get("mode"),
     }
